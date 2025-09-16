@@ -1,0 +1,1 @@
+rootProject.name = "bot_for_gifts"
