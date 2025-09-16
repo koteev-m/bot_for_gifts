@@ -1,5 +1,43 @@
 # Бот-витрина цифровых кейсов с призами
 
+## Стек и версии (зафиксировано)
+| Компонент | Версия | Источник |
+| --- | --- | --- |
+| Kotlin | 2.2.20 | Kotlin 2.2.20 Release Notes |
+| Gradle | 9.0.0 | Gradle 9.0 Release Notes |
+| JDK (toolchain) | 21 | Temurin 21 LTS |
+| Ktor (server & client) | 3.3.0 | Ktor 3.3.0 Docs |
+| kotlinx.coroutines | 1.10.2 | Maven Central |
+| kotlinx.serialization | 1.9.0 | Maven Central |
+| SLF4J | 2.0.17 | slf4j.org |
+| Logback | 1.5.18 | logback.qos.ch |
+| Micrometer BOM | 1.15.1 | Micrometer Docs |
+| Micrometer Prometheus Registry | 1.15.1 | Micrometer Docs |
+| JUnit BOM | 5.13.4 | JUnit Release Notes |
+| MockK | 1.14.5 | Maven Central |
+| HikariCP | 7.0.2 | Maven Central |
+| PostgreSQL JDBC | 42.7.7 | postgresql.org |
+| JDBI | 3.49.5 | JDBI Documentation |
+| dotenv-kotlin | 6.5.1 | Maven Central |
+| ktlint-gradle | 13.1.0 | ktlint-gradle Release Notes |
+| detekt | 1.23.8 | detekt Releases |
+| Versions Plugin | 0.52.0 | Gradle Versions Plugin |
+
+## Совместимость и заметки
+- Kotlin 2.2.20 совместим с kotlinx.coroutines 1.10.2 и kotlinx.serialization 1.9.0, которая требует Kotlin 2.2+.
+- Ktor 3.3.0 покрывает сервер и клиент, включая плагины CallId и MicrometerMetrics.
+- SLF4J 2.0.17 согласован с Logback 1.5.18.
+- Gradle 9.0 с toolchain JDK 21 требует минимум Java 17 в окружении.
+- Все версии управляются через Version Catalog; плагины подключены по alias’ам (кроме стандартного `application`).
+- Используются только стабильные релизы без SNAPSHOT-зависимостей.
+
+## Команды проверки
+- `./gradlew -v`
+- `./gradlew dependencies`
+- `./gradlew build`
+- `./gradlew staticCheck`
+- `./gradlew run`
+
 ## 1. Обзор проекта
 - Telegram-бот с витриной кейсов и цифровыми призами, доступной через Mini App/WebApp.
 - Пользователи оплачивают кейсы в звёздах (XTR), участвуют в розыгрышах и получают Gifts или Telegram Premium.
