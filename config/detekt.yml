@@ -1,0 +1,13 @@
+config:
+  validation: true
+
+console-reports:
+  active: true
+
+style:
+  MagicNumber:
+    active: true
+    ignoreAnnotated:
+      - 'Test'
+      - 'ParameterizedTest'
+      - 'RepeatedTest'

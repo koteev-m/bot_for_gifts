@@ -1,1 +1,8 @@
-rootProject.name = "bot_for_gifts"
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "gifts-bot"
