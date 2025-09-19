@@ -9,6 +9,7 @@ import io.ktor.server.application.install
 import io.ktor.server.config.HoconApplicationConfig
 import io.ktor.server.engine.applicationEnvironment
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.http.content.staticFiles
 import io.ktor.server.metrics.micrometer.MicrometerMetrics
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.BadRequestException
@@ -24,6 +25,9 @@ import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.get
 import io.ktor.server.routing.path
 import io.ktor.server.routing.routing
 import io.micrometer.core.instrument.Gauge
@@ -39,6 +43,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.time.Clock
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 private val applicationLogger = LoggerFactory.getLogger("com.example.app.Application")
@@ -248,6 +255,68 @@ private fun Application.configureRouting(versionResponse: VersionResponse) {
     }
 }
 
+
+    if (miniAppRoot == null || miniAppIndex == null) {
+        applicationLogger.warn(
+            "Mini app bundle is not available. Build the frontend via `npm ci && npm run build`.",
+        )
+    }
+
+    routing {
+        get(healthPath) {
+            call.respondText("OK", contentType = ContentType.Text.Plain)
+        }
+
+        get(metricsPath) {
+            call.respondText(
+                text = prometheusRegistry.scrape(),
+                contentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
+            )
+        }
+
+        get("/version") {
+            call.respond(versionResponse)
+        }
+
+        when {
+            miniAppRoot != null && miniAppIndex != null -> {
+                get("/app") {
+                    call.respondFile(miniAppIndex)
+                }
+                staticFiles("/app", miniAppRoot)
+            }
+
+            else -> {
+                get("/app") {
+                    call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        errorResponse(
+                            status = HttpStatusCode.ServiceUnavailable,
+                            reason = "Mini app bundle is not available",
+                            message = "Build the frontend via `npm ci && npm run build` before starting the server.",
+                            callId = call.callId,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun errorResponse(
+    status: HttpStatusCode,
+    reason: String,
+    message: String? = null,
+    callId: String?,
+): ErrorResponse =
+    ErrorResponse(
+        status = status.value,
+        error = reason,
+        message = message,
+        requestId = callId,
+        timestamp = OffsetDateTime.now(Clock.systemUTC()).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+    )
+
 private fun Application.versionInfo(): VersionResponse =
     VersionResponse(
         app =
@@ -308,6 +377,16 @@ private fun Application.configValue(
 
 @Serializable
 internal data class VersionResponse(
+private data class ErrorResponse(
+    val status: Int,
+    val error: String,
+    val message: String?,
+    val requestId: String?,
+    val timestamp: String,
+)
+
+@Serializable
+private data class VersionResponse(
     val app: String,
     val version: String,
     val git: String?,
