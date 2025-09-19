@@ -40,3 +40,6 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+# Mini App artifacts
+miniapp/node_modules/
+miniapp/dist/
