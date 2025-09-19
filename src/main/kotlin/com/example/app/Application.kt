@@ -69,6 +69,9 @@ fun Application.module() {
 private fun Application.configureHttp() {
     install(DefaultHeaders) {
         header(name = "Server", value = "gifts-bot")
+        header(name = "X-Content-Type-Options", value = "nosniff")
+        header(name = "X-Frame-Options", value = "DENY")
+        header(name = "Referrer-Policy", value = "no-referrer")
     }
 
     install(ContentNegotiation) {
@@ -154,12 +157,24 @@ private fun Application.configureStatusPages() {
             )
             call.respond(
                 HttpStatusCode.BadRequest,
+                errorResponse(
+                    status = HttpStatusCode.BadRequest,
+                    reason = cause.message?.takeUnless { it.isBlank() }
+                        ?: HttpStatusCode.BadRequest.description,
+                    callId = call.callId,
+                ),
+
                 errorResponse(HttpStatusCode.BadRequest, cause.message, call.callId),
             )
         }
         status(HttpStatusCode.NotFound) { call, status ->
             call.respond(
                 status,
+                errorResponse(
+                    status = status,
+                    reason = "Resource not found",
+                    callId = call.callId,
+                ),
                 errorResponse(status, message = "Resource not found", callId = call.callId),
             )
         }
@@ -174,6 +189,8 @@ private fun Application.configureStatusPages() {
             call.respond(
                 HttpStatusCode.InternalServerError,
                 errorResponse(
+                    status = HttpStatusCode.InternalServerError,
+                    reason = "Internal server error",
                     HttpStatusCode.InternalServerError,
                     message = "Internal server error",
                     callId = call.callId,
@@ -215,11 +232,14 @@ private fun Application.configureRouting() {
 
 private fun errorResponse(
     status: HttpStatusCode,
+    reason: String,
     message: String? = null,
     callId: String?,
 ): ErrorResponse =
     ErrorResponse(
         status = status.value,
+        error = reason,
+        requestId = callId ?: "",
         error = status.description,
         message = message,
         requestId = callId,
@@ -288,6 +308,7 @@ private fun Application.configValue(
 private data class ErrorResponse(
     val status: Int,
     val error: String,
+    val requestId: String,
     val message: String?,
     val requestId: String?,
     val timestamp: String,
