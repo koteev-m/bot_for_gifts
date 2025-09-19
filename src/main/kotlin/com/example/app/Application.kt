@@ -27,6 +27,7 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.RoutingNode
 import io.ktor.server.routing.get
 import io.ktor.server.routing.path
+import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics
@@ -40,6 +41,9 @@ import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import java.time.Clock
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 private val applicationLogger = LoggerFactory.getLogger("com.example.app.Application")
@@ -66,6 +70,9 @@ fun Application.module() {
     configureMonitoring(buildInfo)
     configureStatusPages()
     configureRouting(buildInfo)
+    configureMonitoring()
+    configureStatusPages()
+    configureRouting()
 }
 
 private fun Application.configureHttp() {
@@ -103,6 +110,7 @@ private fun Application.configureCallIdPlugin() {
 private fun Application.configureMonitoring(buildInfo: VersionResponse) {
     registerApplicationMetrics(buildInfo)
 
+private fun Application.configureMonitoring() {
     install(CallLogging) {
         logger = requestLogger
         mdc("callId") { call -> call.callId }
@@ -117,6 +125,23 @@ private fun Application.configureMonitoring(buildInfo: VersionResponse) {
             val duration = call.processingTimeMillis()
             val requestId = call.callId ?: "-"
             "${call.request.httpMethod.value} ${call.request.uri} -> $status (${duration}ms, requestId=$requestId)"
+
+        format { call ->
+            buildString {
+                append(call.request.httpMethod.value)
+                append(' ')
+                append(call.request.uri)
+                append(" -> ")
+                append(
+                    call.response
+                        .status()
+                        ?.value
+                        ?.toString() ?: "-",
+                )
+                append(" (requestId=")
+                append(call.callId ?: "-")
+                append(')')
+            }
         }
     }
 
@@ -153,6 +178,8 @@ private fun Application.configureStatusPages() {
                         ?: HttpStatusCode.BadRequest.description,
                     callId = call.callId,
                 ),
+
+                errorResponse(HttpStatusCode.BadRequest, cause.message, call.callId),
             )
         }
         status(HttpStatusCode.NotFound) { call, status ->
@@ -163,6 +190,7 @@ private fun Application.configureStatusPages() {
                     reason = "Resource not found",
                     callId = call.callId,
                 ),
+                errorResponse(status, message = "Resource not found", callId = call.callId),
             )
         }
         exception<Throwable> { call, cause ->
@@ -178,6 +206,8 @@ private fun Application.configureStatusPages() {
                 errorResponse(
                     status = HttpStatusCode.InternalServerError,
                     reason = "Internal server error",
+                    HttpStatusCode.InternalServerError,
+                    message = "Internal server error",
                     callId = call.callId,
                 ),
             )
@@ -186,6 +216,7 @@ private fun Application.configureStatusPages() {
 }
 
 private fun Application.configureRouting(versionResponse: VersionResponse) {
+private fun Application.configureRouting() {
     val config = environment.config
     val healthPath = config.propertyOrNull("app.healthPath")?.getString()?.takeUnless { it.isBlank() } ?: "/health"
     val metricsPath = config.propertyOrNull("app.metricsPath")?.getString()?.takeUnless { it.isBlank() } ?: "/metrics"
@@ -196,6 +227,13 @@ private fun Application.configureRouting(versionResponse: VersionResponse) {
         }
 
         get(metricsPath) {
+
+    routing {
+        get("/health") {
+            call.respondText("OK", contentType = ContentType.Text.Plain)
+        }
+
+        get("/metrics") {
             call.respondText(
                 text = prometheusRegistry.scrape(),
                 contentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
@@ -223,12 +261,25 @@ private fun RoutingNode.normalizedPath(): String = path.ifBlank { "/" }
 private fun errorResponse(
     status: HttpStatusCode,
     reason: String,
+            call.respond(this@configureRouting.versionInfo())
+        }
+    }
+}
+
+private fun errorResponse(
+    status: HttpStatusCode,
+    reason: String,
+    message: String? = null,
     callId: String?,
 ): ErrorResponse =
     ErrorResponse(
         status = status.value,
         error = reason,
         requestId = callId ?: "",
+        error = status.description,
+        message = message,
+        requestId = callId,
+        timestamp = OffsetDateTime.now(Clock.systemUTC()).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 
 private fun Application.versionInfo(): VersionResponse =
@@ -294,6 +345,9 @@ private data class ErrorResponse(
     val status: Int,
     val error: String,
     val requestId: String,
+    val message: String?,
+    val requestId: String?,
+    val timestamp: String,
 )
 
 @Serializable
