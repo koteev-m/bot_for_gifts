@@ -171,6 +171,17 @@ private fun Application.configureStatusPages() {
 }
 
 private fun Application.configureRouting() {
+    val config = environment.config
+    val healthPath = config.propertyOrNull("app.healthPath")?.getString()?.takeUnless { it.isBlank() } ?: "/health"
+    val metricsPath = config.propertyOrNull("app.metricsPath")?.getString()?.takeUnless { it.isBlank() } ?: "/metrics"
+
+    routing {
+        get(healthPath) {
+            call.respondText("OK", contentType = ContentType.Text.Plain)
+        }
+
+        get(metricsPath) {
+
     routing {
         get("/health") {
             call.respondText("OK", contentType = ContentType.Text.Plain)
