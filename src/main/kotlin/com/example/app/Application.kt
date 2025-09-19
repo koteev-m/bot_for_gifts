@@ -10,6 +10,7 @@ import io.ktor.server.application.install
 import io.ktor.server.config.HoconApplicationConfig
 import io.ktor.server.engine.applicationEnvironment
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.http.content.staticFiles
 import io.ktor.server.metrics.micrometer.MicrometerMetrics
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.BadRequestException
@@ -17,30 +18,31 @@ import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.calllogging.processingTimeMillis
+import io.ktor.server.plugins.conditionalheaders.ConditionalHeaders
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.defaultheaders.DefaultHeaders
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
-import io.ktor.server.routing.RoutingNode
 import io.ktor.server.routing.get
 import io.ktor.server.routing.path
-import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
+import io.micrometer.core.instrument.Gauge
+import io.micrometer.core.instrument.Tags
 import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics
 import io.micrometer.core.instrument.binder.system.ProcessorMetrics
-import io.micrometer.core.instrument.Gauge
-import io.micrometer.core.instrument.Tags
 import io.micrometer.prometheusmetrics.PrometheusConfig
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import java.io.File
 import java.time.Clock
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -70,9 +72,6 @@ fun Application.module() {
     configureMonitoring(buildInfo)
     configureStatusPages()
     configureRouting(buildInfo)
-    configureMonitoring()
-    configureStatusPages()
-    configureRouting()
 }
 
 private fun Application.configureHttp() {
@@ -92,6 +91,8 @@ private fun Application.configureHttp() {
             },
         )
     }
+
+    install(ConditionalHeaders)
 }
 
 private fun Application.configureCallIdPlugin() {
@@ -108,9 +109,14 @@ private fun Application.configureCallIdPlugin() {
 }
 
 private fun Application.configureMonitoring(buildInfo: VersionResponse) {
-    registerApplicationMetrics(buildInfo)
+    val metricTags = Tags.of("app", buildInfo.app, "version", buildInfo.version)
+    prometheusRegistry.counter("app_startups_total", metricTags).increment()
+    Gauge
+        .builder("app_build_info") { 1.0 }
+        .description("Build information for the running application")
+        .tags(metricTags)
+        .register(prometheusRegistry)
 
-private fun Application.configureMonitoring() {
     install(CallLogging) {
         logger = requestLogger
         mdc("callId") { call -> call.callId }
@@ -121,27 +127,15 @@ private fun Application.configureMonitoring() {
         }
         mdc("duration") { call -> call.processingTimeMillis().toString() }
         format { call ->
-            val status = call.response.status()?.let { status -> status.value.toString() } ?: "-"
+            val status =
+                call.response
+                    .status()
+                    ?.value
+                    ?.toString()
+                    ?: "-"
             val duration = call.processingTimeMillis()
             val requestId = call.callId ?: "-"
             "${call.request.httpMethod.value} ${call.request.uri} -> $status (${duration}ms, requestId=$requestId)"
-
-        format { call ->
-            buildString {
-                append(call.request.httpMethod.value)
-                append(' ')
-                append(call.request.uri)
-                append(" -> ")
-                append(
-                    call.response
-                        .status()
-                        ?.value
-                        ?.toString() ?: "-",
-                )
-                append(" (requestId=")
-                append(call.callId ?: "-")
-                append(')')
-            }
         }
     }
 
@@ -156,7 +150,10 @@ private fun Application.configureMonitoring() {
                 JvmThreadMetrics(),
                 ProcessorMetrics(),
             )
-        transformRoute { node -> node.normalizedPath() }
+        transformRoute { node ->
+            val routePath = node.path
+            if (routePath.isBlank()) "/" else routePath
+        }
     }
 }
 
@@ -174,12 +171,11 @@ private fun Application.configureStatusPages() {
                 HttpStatusCode.BadRequest,
                 errorResponse(
                     status = HttpStatusCode.BadRequest,
-                    reason = cause.message?.takeUnless { it.isBlank() }
-                        ?: HttpStatusCode.BadRequest.description,
+                    reason =
+                        cause.message?.takeUnless { it.isBlank() }
+                            ?: HttpStatusCode.BadRequest.description,
                     callId = call.callId,
                 ),
-
-                errorResponse(HttpStatusCode.BadRequest, cause.message, call.callId),
             )
         }
         status(HttpStatusCode.NotFound) { call, status ->
@@ -190,7 +186,6 @@ private fun Application.configureStatusPages() {
                     reason = "Resource not found",
                     callId = call.callId,
                 ),
-                errorResponse(status, message = "Resource not found", callId = call.callId),
             )
         }
         exception<Throwable> { call, cause ->
@@ -206,8 +201,6 @@ private fun Application.configureStatusPages() {
                 errorResponse(
                     status = HttpStatusCode.InternalServerError,
                     reason = "Internal server error",
-                    HttpStatusCode.InternalServerError,
-                    message = "Internal server error",
                     callId = call.callId,
                 ),
             )
@@ -216,10 +209,30 @@ private fun Application.configureStatusPages() {
 }
 
 private fun Application.configureRouting(versionResponse: VersionResponse) {
-private fun Application.configureRouting() {
     val config = environment.config
     val healthPath = config.propertyOrNull("app.healthPath")?.getString()?.takeUnless { it.isBlank() } ?: "/health"
     val metricsPath = config.propertyOrNull("app.metricsPath")?.getString()?.takeUnless { it.isBlank() } ?: "/metrics"
+
+    val configuredMiniAppPath =
+        configValue(
+            propertyKeys = listOf("miniapp.dist"),
+            envKeys = listOf("MINIAPP_DIST"),
+            configKeys = listOf("app.miniapp.dist"),
+        )?.takeUnless { it.isBlank() }
+
+    val miniAppRoot =
+        sequenceOf(configuredMiniAppPath, "miniapp/dist")
+            .filterNotNull()
+            .map(::File)
+            .firstOrNull { it.isDirectory }
+            ?.absoluteFile
+    val miniAppIndex = miniAppRoot?.resolve("index.html")?.takeIf { it.isFile }
+
+    if (miniAppRoot == null || miniAppIndex == null) {
+        applicationLogger.warn(
+            "Mini app bundle is not available. Build the frontend via `npm ci && npm run build`.",
+        )
+    }
 
     routing {
         get(healthPath) {
@@ -227,13 +240,6 @@ private fun Application.configureRouting() {
         }
 
         get(metricsPath) {
-
-    routing {
-        get("/health") {
-            call.respondText("OK", contentType = ContentType.Text.Plain)
-        }
-
-        get("/metrics") {
             call.respondText(
                 text = prometheusRegistry.scrape(),
                 contentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
@@ -243,25 +249,28 @@ private fun Application.configureRouting() {
         get("/version") {
             call.respond(versionResponse)
         }
-    }
-}
 
-private fun registerApplicationMetrics(buildInfo: VersionResponse) {
-    val metricTags = Tags.of("app", buildInfo.app, "version", buildInfo.version)
-    prometheusRegistry.counter("app_startups_total", metricTags).increment()
-    Gauge
-        .builder("app_build_info") { 1.0 }
-        .description("Build information for the running application")
-        .tags(metricTags)
-        .register(prometheusRegistry)
-}
+        when {
+            miniAppRoot != null && miniAppIndex != null -> {
+                get("/app") {
+                    call.respondFile(miniAppIndex)
+                }
+                staticFiles("/app", miniAppRoot)
+            }
 
-private fun RoutingNode.normalizedPath(): String = path.ifBlank { "/" }
-
-private fun errorResponse(
-    status: HttpStatusCode,
-    reason: String,
-            call.respond(this@configureRouting.versionInfo())
+            else -> {
+                get("/app") {
+                    call.respond(
+                        HttpStatusCode.ServiceUnavailable,
+                        errorResponse(
+                            status = HttpStatusCode.ServiceUnavailable,
+                            reason = "Mini app bundle is not available",
+                            message = "Build the frontend via `npm ci && npm run build` before starting the server.",
+                            callId = call.callId,
+                        ),
+                    )
+                }
+            }
         }
     }
 }
@@ -275,8 +284,6 @@ private fun errorResponse(
     ErrorResponse(
         status = status.value,
         error = reason,
-        requestId = callId ?: "",
-        error = status.description,
         message = message,
         requestId = callId,
         timestamp = OffsetDateTime.now(Clock.systemUTC()).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
@@ -344,7 +351,6 @@ private fun Application.configValue(
 private data class ErrorResponse(
     val status: Int,
     val error: String,
-    val requestId: String,
     val message: String?,
     val requestId: String?,
     val timestamp: String,
