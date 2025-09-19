@@ -38,6 +38,35 @@
 - `./gradlew staticCheck`
 - `./gradlew run`
 
+## Сервер приложения
+
+### Что делает сервис
+- HTTP-сервис на Ktor 3.3.0, который запускается на Netty и обслуживает базовые маршруты `/health`, `/metrics` и `/version`.
+- Конфигурация портов и путей читается из переменных окружения (`PORT`, `HEALTH_PATH`, `METRICS_PATH`) или из `application.conf`; логирование и Prometheus-метрики настроены по умолчанию.
+
+### Быстрый старт без Docker
+1. Скопируйте пример конфигурации: `cp .env.example .env` и при необходимости обновите значения (`PORT`, `LOG_LEVEL`, `HEALTH_PATH`, `METRICS_PATH`).
+2. Запустите приложение: `./gradlew run` — сервер поднимется на `http://localhost:8080` или на порт из переменной `PORT`.
+
+### Проверка ручками
+```bash
+curl -sS localhost:8080/health
+curl -sS localhost:8080/metrics | head -n 5
+curl -sS localhost:8080/version
+```
+
+### Docker
+```bash
+docker build -t gifts-bot:dev .
+docker run --rm -p 8080:8080 --env-file .env gifts-bot:dev
+
+# либо docker-compose
+docker-compose up --build
+```
+
+### Примечание
+Интеграция с Telegram появится в Промпте №4.
+
 ## 1. Обзор проекта
 - Telegram-бот с витриной кейсов и цифровыми призами, доступной через Mini App/WebApp.
 - Пользователи оплачивают кейсы в звёздах (XTR), участвуют в розыгрышах и получают Gifts или Telegram Premium.
