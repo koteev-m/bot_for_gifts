@@ -16,6 +16,7 @@ import io.ktor.server.plugins.BadRequestException
 import io.ktor.server.plugins.callid.CallId
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.calllogging.CallLogging
+import io.ktor.server.plugins.calllogging.processingTimeMillis
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.defaultheaders.DefaultHeaders
 import io.ktor.server.plugins.statuspages.StatusPages
@@ -97,6 +98,18 @@ private fun Application.configureCallIdPlugin() {
 private fun Application.configureMonitoring() {
     install(CallLogging) {
         logger = requestLogger
+        mdc("callId") { call -> call.callId }
+        mdc("method") { call -> call.request.httpMethod.value }
+        mdc("uri") { call -> call.request.uri }
+        mdc("status") { call ->
+            call.response.status()?.let { status -> status.value.toString() }
+        }
+        mdc("duration") { call -> call.processingTimeMillis().toString() }
+        format { call ->
+            val status = call.response.status()?.let { status -> status.value.toString() } ?: "-"
+            val duration = call.processingTimeMillis()
+            val requestId = call.callId ?: "-"
+            "${call.request.httpMethod.value} ${call.request.uri} -> $status (${duration}ms, requestId=$requestId)"
         format { call ->
             buildString {
                 append(call.request.httpMethod.value)
