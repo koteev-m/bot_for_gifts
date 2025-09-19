@@ -110,6 +110,22 @@ private fun Application.configureMonitoring() {
             val duration = call.processingTimeMillis()
             val requestId = call.callId ?: "-"
             "${call.request.httpMethod.value} ${call.request.uri} -> $status (${duration}ms, requestId=$requestId)"
+        format { call ->
+            buildString {
+                append(call.request.httpMethod.value)
+                append(' ')
+                append(call.request.uri)
+                append(" -> ")
+                append(
+                    call.response
+                        .status()
+                        ?.value
+                        ?.toString() ?: "-",
+                )
+                append(" (requestId=")
+                append(call.callId ?: "-")
+                append(')')
+            }
         }
     }
 
@@ -178,6 +194,13 @@ private fun Application.configureRouting() {
         }
 
         get(metricsPath) {
+
+    routing {
+        get("/health") {
+            call.respondText("OK", contentType = ContentType.Text.Plain)
+        }
+
+        get("/metrics") {
             call.respondText(
                 text = prometheusRegistry.scrape(),
                 contentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
