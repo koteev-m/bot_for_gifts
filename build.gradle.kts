@@ -28,7 +28,10 @@ dependencies {
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.server.call.id)
+    implementation(libs.ktor.server.call.logging)
     implementation(libs.ktor.server.metrics.micrometer)
+    implementation(libs.ktor.server.default.headers)
+    implementation(libs.ktor.server.status.pages)
 
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
@@ -52,11 +55,12 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.mockk)
+    testImplementation(libs.ktor.server.test.host)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 application {
-    mainClass.set("com.example.bootstrap.MainKt")
+    mainClass.set("com.example.app.ApplicationKt")
 }
 
 tasks.test {
