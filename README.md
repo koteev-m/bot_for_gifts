@@ -41,18 +41,26 @@
 ## Сервер приложения
 
 ### Что делает сервис
-- HTTP-сервис на Ktor 3.3.0, который запускается на Netty и обслуживает базовые маршруты `/health`, `/metrics` и `/version`.
+- HTTP-сервис на Ktor 3.3.0, который запускается на Netty и обслуживает базовые маршруты `/health`, `/metrics`, `/version`, а также SPA Mini App по `/app` с отдачей ассетов из `miniapp/dist`.
+- Для статики Mini App включены `ETag`/`Last-Modified`, чтобы браузер корректно кэшировал бандлы.
 - Конфигурация портов и путей читается из переменных окружения (`PORT`, `HEALTH_PATH`, `METRICS_PATH`) или из `application.conf`; логирование и Prometheus-метрики настроены по умолчанию.
 
 ### Быстрый старт без Docker
 1. Скопируйте пример конфигурации: `cp .env.example .env` и при необходимости обновите значения (`PORT`, `LOG_LEVEL`, `HEALTH_PATH`, `METRICS_PATH`).
-2. Запустите приложение: `./gradlew run` — сервер поднимется на `http://localhost:8080` или на порт из переменной `PORT`.
+2. Соберите Mini App: `cd miniapp && npm ci && npm run build && cd ..` — статические файлы окажутся в `miniapp/dist`.
+3. Установите токен бота: экспортируйте `TELEGRAM_BOT_TOKEN` (или пропишите в `.env`). Он используется для HMAC-проверки `initData` и обязателен для доступа к `/api/miniapp/*`.
+4. Запустите приложение: `./gradlew run` — сервер поднимется на `http://localhost:8080` или на порт из переменной `PORT` и будет отдавать Mini App по `/app`.
+
+Путь к бандлу можно переопределить переменной `MINIAPP_DIST`, системным свойством `miniapp.dist` или ключом `app.miniapp.dist` в `application.conf`.
+
+Мини-API `/api/miniapp/*` защищено плагином `WebAppAuthPlugin`: он извлекает `initData` из query/body/headers, сверяет HMAC-SHA256 по алгоритму Telegram и прокидывает `user_id`, `chat_type`, `auth_date` в `call.attributes`.
 
 ### Проверка ручками
 ```bash
 curl -sS localhost:8080/health
 curl -sS localhost:8080/metrics | head -n 5
 curl -sS localhost:8080/version
+curl -I localhost:8080/app
 ```
 
 ### Docker
