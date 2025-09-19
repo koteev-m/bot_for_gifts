@@ -24,6 +24,9 @@ import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.RoutingNode
+import io.ktor.server.routing.get
+import io.ktor.server.routing.path
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.micrometer.core.instrument.binder.jvm.ClassLoaderMetrics
@@ -31,6 +34,8 @@ import io.micrometer.core.instrument.binder.jvm.JvmGcMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmMemoryMetrics
 import io.micrometer.core.instrument.binder.jvm.JvmThreadMetrics
 import io.micrometer.core.instrument.binder.system.ProcessorMetrics
+import io.micrometer.core.instrument.Gauge
+import io.micrometer.core.instrument.Tags
 import io.micrometer.prometheusmetrics.PrometheusConfig
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import kotlinx.serialization.Serializable
@@ -61,6 +66,10 @@ fun main() {
 fun Application.module() {
     configureHttp()
     configureCallIdPlugin()
+    val buildInfo = versionInfo()
+    configureMonitoring(buildInfo)
+    configureStatusPages()
+    configureRouting(buildInfo)
     configureMonitoring()
     configureStatusPages()
     configureRouting()
@@ -98,6 +107,9 @@ private fun Application.configureCallIdPlugin() {
     }
 }
 
+private fun Application.configureMonitoring(buildInfo: VersionResponse) {
+    registerApplicationMetrics(buildInfo)
+
 private fun Application.configureMonitoring() {
     install(CallLogging) {
         logger = requestLogger
@@ -113,6 +125,7 @@ private fun Application.configureMonitoring() {
             val duration = call.processingTimeMillis()
             val requestId = call.callId ?: "-"
             "${call.request.httpMethod.value} ${call.request.uri} -> $status (${duration}ms, requestId=$requestId)"
+
         format { call ->
             buildString {
                 append(call.request.httpMethod.value)
@@ -134,6 +147,7 @@ private fun Application.configureMonitoring() {
 
     install(MicrometerMetrics) {
         registry = prometheusRegistry
+        distinctNotRegisteredRoutes = false
         meterBinders =
             listOf(
                 ClassLoaderMetrics(),
@@ -142,6 +156,7 @@ private fun Application.configureMonitoring() {
                 JvmThreadMetrics(),
                 ProcessorMetrics(),
             )
+        transformRoute { node -> node.normalizedPath() }
     }
 }
 
@@ -200,6 +215,7 @@ private fun Application.configureStatusPages() {
     }
 }
 
+private fun Application.configureRouting(versionResponse: VersionResponse) {
 private fun Application.configureRouting() {
     val config = environment.config
     val healthPath = config.propertyOrNull("app.healthPath")?.getString()?.takeUnless { it.isBlank() } ?: "/health"
@@ -225,6 +241,26 @@ private fun Application.configureRouting() {
         }
 
         get("/version") {
+            call.respond(versionResponse)
+        }
+    }
+}
+
+private fun registerApplicationMetrics(buildInfo: VersionResponse) {
+    val metricTags = Tags.of("app", buildInfo.app, "version", buildInfo.version)
+    prometheusRegistry.counter("app_startups_total", metricTags).increment()
+    Gauge
+        .builder("app_build_info") { 1.0 }
+        .description("Build information for the running application")
+        .tags(metricTags)
+        .register(prometheusRegistry)
+}
+
+private fun RoutingNode.normalizedPath(): String = path.ifBlank { "/" }
+
+private fun errorResponse(
+    status: HttpStatusCode,
+    reason: String,
             call.respond(this@configureRouting.versionInfo())
         }
     }
