@@ -1,0 +1,77 @@
+cases:
+  - id: "starter_pack"
+    title: "Стартовый набор идей"
+    price_stars: 29
+    thumbnail: "https://cdn.gifts-bot.dev/cases/starter-pack.png"
+    short_description: "Быстрый запуск рассылки и welcome-флоу с готовыми скриптами."
+    economy:
+      rtp_ext: 0.44
+      jackpot_share: 0.04
+      pity_timer: 12
+    rewards:
+      - type: "gift"
+        name: "Стикер-пак"
+        weight: 0.52
+      - type: "gift"
+        name: "Мини-курс по прогреву"
+        weight: 0.32
+      - type: "premium"
+        months: 1
+        weight: 0.16
+  - id: "premium_launch"
+    title: "Премиальный запуск"
+    price_stars: 99
+    thumbnail: "https://cdn.gifts-bot.dev/cases/premium-launch.png"
+    short_description: "Полный сценарий прогрева с VIP-предложениями и бонусами."
+    economy:
+      rtp_ext: 0.48
+      jackpot_share: 0.05
+      pity_timer: 18
+    rewards:
+      - type: "gift"
+        name: "Telegram Premium 3 месяца"
+        weight: 0.18
+      - type: "gift"
+        name: "Сертификат на рассылку"
+        weight: 0.54
+      - type: "jackpot"
+        name: "Зимний розыгрыш"
+        weight: 0.28
+  - id: "loyalty_drive"
+    title: "Программа лояльности"
+    price_stars: 299
+    thumbnail: "https://cdn.gifts-bot.dev/cases/loyalty-drive.png"
+    short_description: "Автоматизация повторных продаж и персональных бонусов."
+    economy:
+      rtp_ext: 0.5
+      jackpot_share: 0.06
+      pity_timer: 20
+    rewards:
+      - type: "gift"
+        name: "Premium 6 месяцев"
+        weight: 0.15
+      - type: "gift"
+        name: "500 XTR cashback"
+        weight: 0.45
+      - type: "jackpot"
+        name: "Золотой розыгрыш"
+        weight: 0.4
+  - id: "vip_jackpot"
+    title: "VIP-джекпот"
+    price_stars: 999
+    thumbnail: "https://cdn.gifts-bot.dev/cases/vip-jackpot.png"
+    short_description: "Эксклюзивные призы и крупные джекпоты для топовых клиентов."
+    economy:
+      rtp_ext: 0.38
+      jackpot_share: 0.08
+      pity_timer: 25
+    rewards:
+      - type: "gift"
+        name: "Premium 12 месяцев"
+        weight: 0.22
+      - type: "gift"
+        name: "Мерч-коллекция"
+        weight: 0.38
+      - type: "jackpot"
+        name: "Кейс Supernova"
+        weight: 0.4
