@@ -181,6 +181,13 @@ private fun Application.configureRouting() {
         }
 
         get(metricsPath) {
+
+    routing {
+        get("/health") {
+            call.respondText("OK", contentType = ContentType.Text.Plain)
+        }
+
+        get("/metrics") {
             call.respondText(
                 text = prometheusRegistry.scrape(),
                 contentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
