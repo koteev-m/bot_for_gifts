@@ -48,6 +48,12 @@
 ### Быстрый старт без Docker
 1. Скопируйте пример конфигурации: `cp .env.example .env` и при необходимости обновите значения (`PORT`, `LOG_LEVEL`, `HEALTH_PATH`, `METRICS_PATH`).
 2. Соберите Mini App: `cd miniapp && npm ci && npm run build && cd ..` — статические файлы окажутся в `miniapp/dist`.
+3. Установите токен бота: экспортируйте `TELEGRAM_BOT_TOKEN` (или пропишите в `.env`). Он используется для HMAC-проверки `initData` и обязателен для доступа к `/api/miniapp/*`.
+4. Запустите приложение: `./gradlew run` — сервер поднимется на `http://localhost:8080` или на порт из переменной `PORT` и будет отдавать Mini App по `/app`.
+
+Путь к бандлу можно переопределить переменной `MINIAPP_DIST`, системным свойством `miniapp.dist` или ключом `app.miniapp.dist` в `application.conf`.
+
+Мини-API `/api/miniapp/*` защищено плагином `WebAppAuthPlugin`: он извлекает `initData` из query/body/headers, сверяет HMAC-SHA256 по алгоритму Telegram и прокидывает `user_id`, `chat_type`, `auth_date` в `call.attributes`.
 3. Запустите приложение: `./gradlew run` — сервер поднимется на `http://localhost:8080` или на порт из переменной `PORT` и будет отдавать Mini App по `/app`.
 
 Путь к бандлу можно переопределить переменной `MINIAPP_DIST`, системным свойством `miniapp.dist` или ключом `app.miniapp.dist` в `application.conf`.

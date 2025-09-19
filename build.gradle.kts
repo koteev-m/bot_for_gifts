@@ -32,6 +32,7 @@ dependencies {
     implementation(libs.ktor.server.metrics.micrometer)
     implementation(libs.ktor.server.default.headers)
     implementation(libs.ktor.server.conditional.headers)
+    implementation(libs.ktor.server.double.receive)
     implementation(libs.ktor.server.status.pages)
 
     implementation(libs.ktor.client.cio)

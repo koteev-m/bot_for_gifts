@@ -1,7 +1,6 @@
 package com.example.app
 
 import com.typesafe.config.ConfigFactory
-import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -21,6 +20,7 @@ import io.ktor.server.plugins.calllogging.processingTimeMillis
 import io.ktor.server.plugins.conditionalheaders.ConditionalHeaders
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.defaultheaders.DefaultHeaders
+import io.ktor.server.plugins.doublereceive.DoubleReceive
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
@@ -50,7 +50,7 @@ import java.util.UUID
 
 private val applicationLogger = LoggerFactory.getLogger("com.example.app.Application")
 private val requestLogger = LoggerFactory.getLogger("com.example.app.RequestLogger")
-private val prometheusRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
+internal val prometheusRegistry = PrometheusMeterRegistry(PrometheusConfig.DEFAULT)
 
 fun main() {
     val environment =
@@ -93,6 +93,7 @@ private fun Application.configureHttp() {
     }
 
     install(ConditionalHeaders)
+    install(DoubleReceive)
 }
 
 private fun Application.configureCallIdPlugin() {
@@ -169,7 +170,7 @@ private fun Application.configureStatusPages() {
             )
             call.respond(
                 HttpStatusCode.BadRequest,
-                errorResponse(
+                com.example.app.api.errorResponse(
                     status = HttpStatusCode.BadRequest,
                     reason =
                         cause.message?.takeUnless { it.isBlank() }
@@ -181,7 +182,7 @@ private fun Application.configureStatusPages() {
         status(HttpStatusCode.NotFound) { call, status ->
             call.respond(
                 status,
-                errorResponse(
+                com.example.app.api.errorResponse(
                     status = status,
                     reason = "Resource not found",
                     callId = call.callId,
@@ -198,7 +199,7 @@ private fun Application.configureStatusPages() {
             )
             call.respond(
                 HttpStatusCode.InternalServerError,
-                errorResponse(
+                com.example.app.api.errorResponse(
                     status = HttpStatusCode.InternalServerError,
                     reason = "Internal server error",
                     callId = call.callId,
@@ -227,6 +228,33 @@ private fun Application.configureRouting(versionResponse: VersionResponse) {
             .firstOrNull { it.isDirectory }
             ?.absoluteFile
     val miniAppIndex = miniAppRoot?.resolve("index.html")?.takeIf { it.isFile }
+
+    val botToken =
+        configValue(
+            propertyKeys = listOf("bot.token", "telegram.bot.token"),
+            envKeys = listOf("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
+            configKeys = listOf("app.telegram.botToken", "telegram.botToken"),
+        )?.takeUnless { it.isBlank() }
+
+    if (miniAppRoot == null || miniAppIndex == null) {
+        applicationLogger.warn(
+            "Mini app bundle is not available. Build the frontend via `npm ci && npm run build`.",
+        )
+    }
+
+    if (botToken == null) {
+        applicationLogger.warn(
+            "Telegram bot token is not configured; Mini App API authentication is disabled.",
+        )
+    }
+
+    routing {
+        registerOperationalRoutes(healthPath, metricsPath, versionResponse)
+        registerMiniAppRoutes(miniAppRoot, miniAppIndex)
+        registerMiniAppApiRoutes(botToken)
+    }
+}
+
 
     if (miniAppRoot == null || miniAppIndex == null) {
         applicationLogger.warn(
@@ -348,6 +376,7 @@ private fun Application.configValue(
 }
 
 @Serializable
+internal data class VersionResponse(
 private data class ErrorResponse(
     val status: Int,
     val error: String,
