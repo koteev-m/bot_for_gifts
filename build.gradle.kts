@@ -59,7 +59,7 @@ dependencies {
 }
 
 application {
-    mainClass.set("com.example.bootstrap.MainKt")
+    mainClass.set("com.example.app.ApplicationKt")
 }
 
 tasks.test {
