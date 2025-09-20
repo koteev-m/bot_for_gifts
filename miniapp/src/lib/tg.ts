@@ -14,6 +14,7 @@ export interface TelegramThemeParams {
 export interface TelegramWebApp {
   readonly colorScheme: TelegramColorScheme;
   readonly themeParams: TelegramThemeParams;
+  readonly initData: string;
   ready(): void;
   expand(): void;
   isExpanded: boolean;

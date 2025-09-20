@@ -53,6 +53,7 @@ dependencies {
     implementation(libs.jdbi.sqlobject)
 
     implementation(libs.dotenv.kotlin)
+    implementation(libs.snakeyaml)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

@@ -1,5 +1,6 @@
 package com.example.app
 
+import com.example.app.miniapp.MiniCasesConfigService
 import com.typesafe.config.ConfigFactory
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
@@ -220,6 +221,43 @@ private fun Application.configureRouting(versionResponse: VersionResponse) {
             envKeys = listOf("MINIAPP_DIST"),
             configKeys = listOf("app.miniapp.dist"),
         )?.takeUnless { it.isBlank() }
+
+    val miniAppRoot =
+        sequenceOf(configuredMiniAppPath, "miniapp/dist")
+            .filterNotNull()
+            .map(::File)
+            .firstOrNull { it.isDirectory }
+            ?.absoluteFile
+    val miniAppIndex = miniAppRoot?.resolve("index.html")?.takeIf { it.isFile }
+
+    val botToken =
+        configValue(
+            propertyKeys = listOf("bot.token", "telegram.bot.token"),
+            envKeys = listOf("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
+            configKeys = listOf("app.telegram.botToken", "telegram.botToken"),
+        )?.takeUnless { it.isBlank() }
+
+    if (miniAppRoot == null || miniAppIndex == null) {
+        applicationLogger.warn(
+            "Mini app bundle is not available. Build the frontend via `npm ci && npm run build`.",
+        )
+    }
+
+    if (botToken == null) {
+        applicationLogger.warn(
+            "Telegram bot token is not configured; Mini App API authentication is disabled.",
+        )
+    }
+
+    val miniCasesConfigService = MiniCasesConfigService()
+
+    routing {
+        registerOperationalRoutes(healthPath, metricsPath, versionResponse)
+        registerMiniAppRoutes(miniAppRoot, miniAppIndex)
+        registerMiniAppApiRoutes(botToken, miniCasesConfigService)
+    }
+}
+
 
     val miniAppRoot =
         sequenceOf(configuredMiniAppPath, "miniapp/dist")

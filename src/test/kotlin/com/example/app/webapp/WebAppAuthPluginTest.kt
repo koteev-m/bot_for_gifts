@@ -44,6 +44,7 @@ class WebAppAuthPluginTest {
 
             val response =
                 client.get("/api/miniapp/profile") {
+                    parameter("initData", TestInitDataFactory.signedInitData())
                     parameter("initData", signedInitData())
                 }
 
@@ -59,6 +60,7 @@ class WebAppAuthPluginTest {
             val response =
                 client.post("/api/miniapp/profile") {
                     headers { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) }
+                    setBody("""{"initData":"${TestInitDataFactory.signedInitData()}"}""")
                     setBody("""{"initData":"${signedInitData()}"}""")
                 }
 
@@ -73,6 +75,7 @@ class WebAppAuthPluginTest {
 
             val response =
                 client.get("/api/miniapp/profile") {
+                    parameter("initData", TestInitDataFactory.tamperedInitData())
                     parameter("initData", tamperedInitData())
                 }
 
@@ -102,6 +105,7 @@ class WebAppAuthPluginTest {
             routing {
                 route("/api/miniapp") {
                     install(WebAppAuthPlugin) {
+                        botToken = TestInitDataFactory.BOT_TOKEN
                         botToken = BOT_TOKEN
                         clock = FIXED_CLOCK
                     }
@@ -130,6 +134,7 @@ class WebAppAuthPluginTest {
         }
     }
 
+    companion object {
     private fun signedInitData(overrides: Map<String, List<String>> = emptyMap()): String {
         val payload = (BASE_PARAMETERS + overrides).filterKeys { it != "hash" }
         val hash = InitDataVerifier.calculateHash(payload, BOT_TOKEN)

@@ -1,6 +1,12 @@
 package com.example.app
 
 import com.example.app.api.errorResponse
+import com.example.app.miniapp.MiniCasesConfigService
+import com.example.app.webapp.WebAppAuthPlugin
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.call
 import com.example.app.webapp.WebAppAuthPlugin
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -59,12 +65,21 @@ internal fun Route.registerMiniAppRoutes(
     }
 }
 
+internal fun Route.registerMiniAppApiRoutes(
+    botToken: String?,
+    miniCasesConfigService: MiniCasesConfigService,
+) {
 internal fun Route.registerMiniAppApiRoutes(botToken: String?) {
     botToken ?: return
 
     route("/api/miniapp") {
         install(WebAppAuthPlugin) {
             this.botToken = botToken
+        }
+
+        get("/cases") {
+            call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+            call.respond(miniCasesConfigService.getMiniCases())
         }
     }
 }
