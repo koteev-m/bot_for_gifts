@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ResolvedTelegramTheme,
   initializeTelegramWebApp,
@@ -246,6 +247,8 @@ const renderCasesContent = (
 const App = () => {
   const [theme, refreshTheme] = useTelegramTheme();
   const { cases, loading, error, initDataMissing } = useMiniCases();
+const App = () => {
+  const [theme, refreshTheme] = useTelegramTheme();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -280,6 +283,8 @@ const App = () => {
           <p className="description">
             Подборка готовых сценариев, подарков и механик. Запускайте кампании быстрее и
             управляйте экономикой кейсов из одного места.
+            Здесь скоро появятся подборки проектов и сценариев. Следите за обновлениями,
+            чтобы узнать больше.
           </p>
         </header>
 

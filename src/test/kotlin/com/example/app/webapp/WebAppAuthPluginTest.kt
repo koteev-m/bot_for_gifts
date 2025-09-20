@@ -30,6 +30,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -43,6 +45,7 @@ class WebAppAuthPluginTest {
             val response =
                 client.get("/api/miniapp/profile") {
                     parameter("initData", TestInitDataFactory.signedInitData())
+                    parameter("initData", signedInitData())
                 }
 
             assertEquals(HttpStatusCode.OK, response.status)
@@ -58,6 +61,7 @@ class WebAppAuthPluginTest {
                 client.post("/api/miniapp/profile") {
                     headers { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) }
                     setBody("""{"initData":"${TestInitDataFactory.signedInitData()}"}""")
+                    setBody("""{"initData":"${signedInitData()}"}""")
                 }
 
             assertEquals(HttpStatusCode.OK, response.status)
@@ -72,6 +76,7 @@ class WebAppAuthPluginTest {
             val response =
                 client.get("/api/miniapp/profile") {
                     parameter("initData", TestInitDataFactory.tamperedInitData())
+                    parameter("initData", tamperedInitData())
                 }
 
             assertEquals(HttpStatusCode.Forbidden, response.status)
@@ -101,6 +106,7 @@ class WebAppAuthPluginTest {
                 route("/api/miniapp") {
                     install(WebAppAuthPlugin) {
                         botToken = TestInitDataFactory.BOT_TOKEN
+                        botToken = BOT_TOKEN
                         clock = FIXED_CLOCK
                     }
 
@@ -129,6 +135,42 @@ class WebAppAuthPluginTest {
     }
 
     companion object {
+    private fun signedInitData(overrides: Map<String, List<String>> = emptyMap()): String {
+        val payload = (BASE_PARAMETERS + overrides).filterKeys { it != "hash" }
+        val hash = InitDataVerifier.calculateHash(payload, BOT_TOKEN)
+        val finalParameters = payload + mapOf("hash" to listOf(hash))
+        return buildInitDataString(finalParameters)
+    }
+
+    private fun tamperedInitData(): String {
+        val altered = BASE_PARAMETERS.toMutableMap()
+        altered["query_id"] = listOf("tampered")
+        val hash = InitDataVerifier.calculateHash(BASE_PARAMETERS, BOT_TOKEN)
+        val finalParameters = altered + mapOf("hash" to listOf(hash))
+        return buildInitDataString(finalParameters)
+    }
+
+    private fun buildInitDataString(parameters: Map<String, List<String>>): String {
+        val encoded = mutableListOf<String>()
+        parameters.forEach { (key, values) ->
+            values.forEach { value ->
+                encoded += "${encode(key)}=${encode(value)}"
+            }
+        }
+        return encoded.joinToString("&")
+    }
+
+    private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
+
+    companion object {
+        private const val BOT_TOKEN = "123456:TEST-TOKEN"
+        private val BASE_PARAMETERS =
+            mapOf(
+                "auth_date" to listOf("1700000000"),
+                "query_id" to listOf("AAAbbb"),
+                "user" to listOf("""{"id":424242,"username":"tester"}"""),
+                "chat_type" to listOf("sender"),
+            )
         private val FIXED_CLOCK: Clock = Clock.fixed(Instant.parse("2024-01-01T00:00:00Z"), ZoneOffset.UTC)
     }
 }

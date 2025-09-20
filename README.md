@@ -56,6 +56,9 @@
 Мини-API `/api/miniapp/*` защищено плагином `WebAppAuthPlugin`: он извлекает `initData` из query/body/headers, сверяет HMAC-SHA256 по алгоритму Telegram и прокидывает `user_id`, `chat_type`, `auth_date` в `call.attributes`.
 
 Эндпоинт `/api/miniapp/cases` возвращает публичные данные витрины (id, название, цену в звёздах, миниатюру и короткое описание) из `src/main/resources/cases.yaml`. Ответы помечаются `Cache-Control: no-store`, чтобы Mini App всегда подтягивал актуальный конфиг.
+3. Запустите приложение: `./gradlew run` — сервер поднимется на `http://localhost:8080` или на порт из переменной `PORT` и будет отдавать Mini App по `/app`.
+
+Путь к бандлу можно переопределить переменной `MINIAPP_DIST`, системным свойством `miniapp.dist` или ключом `app.miniapp.dist` в `application.conf`.
 
 ### Проверка ручками
 ```bash

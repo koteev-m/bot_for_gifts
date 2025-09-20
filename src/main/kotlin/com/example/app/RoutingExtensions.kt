@@ -7,6 +7,9 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
+import com.example.app.webapp.WebAppAuthPlugin
+import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.response.respond
@@ -66,6 +69,7 @@ internal fun Route.registerMiniAppApiRoutes(
     botToken: String?,
     miniCasesConfigService: MiniCasesConfigService,
 ) {
+internal fun Route.registerMiniAppApiRoutes(botToken: String?) {
     botToken ?: return
 
     route("/api/miniapp") {
