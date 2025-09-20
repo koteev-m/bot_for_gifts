@@ -3,47 +3,71 @@ package com.example.giftsbot.telegram
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.ServerResponseException
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
-import java.io.IOException
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.io.IOException
+import java.nio.channels.UnresolvedAddressException
+
+private const val DEFAULT_BASE_URL = "https://api.telegram.org"
+private const val REQUEST_TIMEOUT_MILLIS = 30_000L
+private const val CONNECT_TIMEOUT_MILLIS = 10_000L
+private const val SOCKET_TIMEOUT_MILLIS = 30_000L
+private const val MIN_TIMEOUT_SECONDS = 1
+private const val MAX_TIMEOUT_SECONDS = 50
+private const val SERVER_ERROR_START = 500
+private const val SERVER_ERROR_END = 599
+private const val CLIENT_ERROR_START = 400
+private const val TOO_MANY_REQUESTS_CODE = 429
+private const val SUCCESS_STATUS_START = 200
+private const val SUCCESS_STATUS_END = 299
+private const val MAX_ATTEMPTS = 4
+private const val INITIAL_RETRY_DELAY_MS = 200L
+private const val MAX_RETRY_DELAY_MS = 1_600L
+private const val MAX_ERROR_BODY_PREVIEW = 512
+private const val NANOS_IN_MILLISECOND = 1_000_000L
 
 class TelegramApiClient(
     private val botToken: String,
-    private val http: HttpClient = HttpClient(CIO) {
-        expectSuccess = false
-        install(ContentNegotiation) {
-            json(
-                Json {
-                    ignoreUnknownKeys = true
-                    explicitNulls = false
-                },
-            )
-        }
-        install(HttpTimeout) {
-            requestTimeoutMillis = 30_000
-            connectTimeoutMillis = 10_000
-            socketTimeoutMillis = 30_000
-        }
-    },
-    private val baseUrl: String = "https://api.telegram.org",
+    private val http: HttpClient =
+        HttpClient(CIO) {
+            expectSuccess = false
+            install(ContentNegotiation) {
+                json(
+                    Json {
+                        ignoreUnknownKeys = true
+                        explicitNulls = false
+                    },
+                )
+            }
+            install(HttpTimeout) {
+                requestTimeoutMillis = REQUEST_TIMEOUT_MILLIS
+                connectTimeoutMillis = CONNECT_TIMEOUT_MILLIS
+                socketTimeoutMillis = SOCKET_TIMEOUT_MILLIS
+            }
+        },
+    private val baseUrl: String = DEFAULT_BASE_URL,
 ) {
     private val logger = LoggerFactory.getLogger(TelegramApiClient::class.java)
-    private val apiBaseUrl = "$baseUrl/bot$botToken"
+    private val apiBaseUrl: String = "$baseUrl/bot$botToken"
 
     suspend fun setWebhook(
         url: String,
@@ -57,17 +81,17 @@ class TelegramApiClient(
             allowedUpdates,
             url.isNotBlank(),
         )
-        val result = execute<Boolean>("setWebhook", HttpMethod.Post) {
-            contentType(ContentType.Application.Json)
-            setBody(
-                SetWebhookRequest(
-                    url = url,
-                    secret_token = secretToken,
-                    allowed_updates = allowedUpdates,
-                    max_connections = maxConnections,
-                ),
+        val result =
+            execute<Boolean>(
+                methodName = "setWebhook",
+                body =
+                    SetWebhookRequest(
+                        url = url,
+                        secretToken = secretToken,
+                        allowedUpdates = allowedUpdates,
+                        maxConnections = maxConnections,
+                    ),
             )
-        }
         if (result) {
             return true
         }
@@ -76,10 +100,11 @@ class TelegramApiClient(
 
     suspend fun deleteWebhook(dropPending: Boolean = false): Boolean {
         logger.debug("deleteWebhook request dropPending={}", dropPending)
-        val result = execute<Boolean>("deleteWebhook", HttpMethod.Post) {
-            contentType(ContentType.Application.Json)
-            setBody(DeleteWebhookRequest(drop_pending_updates = dropPending))
-        }
+        val result =
+            execute<Boolean>(
+                methodName = "deleteWebhook",
+                body = DeleteWebhookRequest(dropPendingUpdates = dropPending),
+            )
         if (result) {
             return true
         }
@@ -87,7 +112,7 @@ class TelegramApiClient(
     }
 
     suspend fun getWebhookInfo(): WebhookInfoDto {
-        val webhookInfo = execute<WebhookInfoDto>("getWebhookInfo", HttpMethod.Get)
+        val webhookInfo = execute<WebhookInfoDto>(methodName = "getWebhookInfo")
         logger.debug(
             "getWebhookInfo response pendingUpdateCount={} hasCustomCertificate={}",
             webhookInfo.pending_update_count,
@@ -101,173 +126,135 @@ class TelegramApiClient(
         timeoutSeconds: Int,
         allowedUpdates: List<String>? = null,
     ): List<UpdateDto> {
-        require(timeoutSeconds in 1..50) { "timeoutSeconds must be between 1 and 50" }
+        require(timeoutSeconds in MIN_TIMEOUT_SECONDS..MAX_TIMEOUT_SECONDS) {
+            "timeoutSeconds must be between $MIN_TIMEOUT_SECONDS and $MAX_TIMEOUT_SECONDS"
+        }
         logger.debug(
             "getUpdates request offset={} timeoutSeconds={} allowedUpdates={}",
             offset,
             timeoutSeconds,
             allowedUpdates,
         )
-        return execute("getUpdates", HttpMethod.Post) {
-            contentType(ContentType.Application.Json)
-            setBody(
+        return execute(
+            methodName = "getUpdates",
+            body =
                 GetUpdatesRequest(
                     offset = offset,
                     timeout = timeoutSeconds,
-                    allowed_updates = allowedUpdates,
+                    allowedUpdates = allowedUpdates,
                 ),
-            )
-        }
+        )
     }
 
     private suspend inline fun <reified T> execute(
         methodName: String,
-        httpMethod: HttpMethod,
-        crossinline configure: HttpRequestBuilder.() -> Unit = {},
+        body: Any? = null,
     ): T {
-        var attempt = 0
-        var delayMillis = INITIAL_RETRY_DELAY_MS
-        while (true) {
-            attempt += 1
-            val startTime = System.nanoTime()
-            try {
-                val response = http.request("$apiBaseUrl/$methodName") {
-                    method = httpMethod
-                    configure()
-                }
-                val durationMs = (System.nanoTime() - startTime) / NANOS_IN_MILLISECOND
-                val status = response.status
-                val canRetry = status.value in 500..599 && attempt <= MAX_RETRIES
-                logStatus(methodName, status, durationMs, attempt, canRetry)
-                if (!status.isSuccess()) {
-                    val bodyText = response.bodyAsText()
-                    if (canRetry) {
-                        delay(delayMillis)
-                        delayMillis = (delayMillis * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-                        continue
-                    }
-                    val message = buildString {
-                        append("Telegram API ")
-                        append(methodName)
-                        append(" HTTP ")
-                        append(status.value)
-                        if (bodyText.isNotBlank()) {
-                            append(": ")
-                            append(bodyText.take(MAX_ERROR_BODY_PREVIEW))
-                        }
-                    }
-                    throw TelegramApiException(message)
-                }
-
-                val apiResponse: ApiResponse<T> = response.body<ApiResponse<T>>()
-                if (!apiResponse.ok) {
-                    val description = apiResponse.description ?: "Unknown Telegram error"
-                    logger.warn("Telegram API {} business error: {}", methodName, description)
-                    throw TelegramApiException(description)
-                }
-                val result = apiResponse.result
-                    ?: throw TelegramApiException("Telegram API $methodName returned null result")
-                return result
-            } catch (exception: Exception) {
-                if (exception is CancellationException) {
-                    throw exception
-                }
-                val durationMs = (System.nanoTime() - startTime) / NANOS_IN_MILLISECOND
-                val isNetworkIssue = exception is IOException || exception is HttpRequestTimeoutException
-                val canRetry = isNetworkIssue && attempt <= MAX_RETRIES
-                if (isNetworkIssue) {
-                    if (canRetry) {
-                        logger.warn(
-                            "Telegram API {} network error ({}). durationMs={} attempt={} willRetry=true",
-                            methodName,
-                            exception.message,
-                            durationMs,
-                            attempt,
-                        )
-                        delay(delayMillis)
-                        delayMillis = (delayMillis * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-                        continue
-                    }
-                    logger.error(
-                        "Telegram API {} network error ({}). durationMs={} attempt={} willRetry=false",
-                        methodName,
-                        exception.message,
-                        durationMs,
-                        attempt,
-                        exception,
-                    )
-                } else {
-                    logger.error(
-                        "Telegram API {} request failed: {}. durationMs={} attempt={} willRetry=false",
-                        methodName,
-                        exception.message,
-                        durationMs,
-                        attempt,
-                        exception,
-                    )
-                }
-                throw exception
-            }
-        }
+        val url = buildUrl(methodName)
+        val response = withRetry(methodName) { performRequest(url, body) }
+        return parseResponse(methodName, response)
     }
 
-    private fun logStatus(
+    private fun buildUrl(method: String): String = "$apiBaseUrl/$method"
+
+    private suspend fun performRequest(
+        path: String,
+        body: Any?,
+    ): HttpResponse =
+        http.request(path) {
+            method = if (body == null) HttpMethod.Get else HttpMethod.Post
+            if (body != null) {
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+        }
+
+    private suspend inline fun <reified T> parseResponse(
         methodName: String,
-        status: HttpStatusCode,
-        durationMs: Long,
-        attempt: Int,
-        willRetry: Boolean,
-    ) {
-        when {
-            status.value >= 500 -> {
-                if (willRetry) {
-                    logger.warn(
-                        "Telegram API {} status={} durationMs={} attempt={} willRetry={}",
-                        methodName,
-                        status.value,
-                        durationMs,
-                        attempt,
-                        willRetry,
-                    )
-                } else {
-                    logger.error(
-                        "Telegram API {} status={} durationMs={} attempt={} willRetry={}",
-                        methodName,
-                        status.value,
-                        durationMs,
-                        attempt,
-                        willRetry,
-                    )
+        response: HttpResponse,
+    ): T {
+        if (!response.status.isSuccess()) {
+            val bodyText = response.bodyAsText()
+            val message =
+                buildString {
+                    append("Telegram API ")
+                    append(methodName)
+                    append(" HTTP ")
+                    append(response.status.value)
+                    if (bodyText.isNotBlank()) {
+                        append(": ")
+                        append(bodyText.take(MAX_ERROR_BODY_PREVIEW))
+                    }
                 }
-            }
-            status.value == 429 -> logger.warn(
-                "Telegram API {} status={} durationMs={} attempt={} willRetry={}",
-                methodName,
-                status.value,
-                durationMs,
-                attempt,
-                willRetry,
-            )
-            status.value >= 400 -> logger.warn(
-                "Telegram API {} status={} durationMs={} attempt={} willRetry={}",
-                methodName,
-                status.value,
-                durationMs,
-                attempt,
-                willRetry,
-            )
-            else -> logger.info(
-                "Telegram API {} status={} durationMs={} attempt={} willRetry={}",
-                methodName,
-                status.value,
-                durationMs,
-                attempt,
-                willRetry,
-            )
+            throw TelegramApiException(message)
         }
+        val apiResponse: ApiResponse<T> = response.body()
+        if (!apiResponse.ok) {
+            val description = apiResponse.description ?: "Unknown Telegram error"
+            logger.warn("Telegram API {} business error: {}", methodName, description)
+            throw TelegramApiException(description)
+        }
+        return apiResponse.result ?: nullResultError(methodName)
     }
 
-    private fun HttpStatusCode.isSuccess(): Boolean = value in 200..299
+    private suspend fun withRetry(
+        methodName: String,
+        block: suspend () -> HttpResponse,
+    ): HttpResponse {
+        var attempt = 1
+        var delayMillis = INITIAL_RETRY_DELAY_MS
+        while (attempt <= MAX_ATTEMPTS) {
+            val hasAttemptsLeft = attempt < MAX_ATTEMPTS
+            val startTime = System.nanoTime()
+            when (val result = runAttempt(methodName, block, attempt, hasAttemptsLeft, startTime)) {
+                is AttemptResult.Success -> return result.response
+                is AttemptResult.Retry -> {
+                    delay(delayMillis)
+                    delayMillis = nextDelay(delayMillis)
+                    attempt += 1
+                }
+                is AttemptResult.Failure -> throw result.cause
+            }
+        }
+        throw TelegramApiException("Telegram API $methodName failed after $MAX_ATTEMPTS attempts")
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun runAttempt(
+        methodName: String,
+        block: suspend () -> HttpResponse,
+        attempt: Int,
+        hasAttemptsLeft: Boolean,
+        startTime: Long,
+    ): AttemptResult =
+        try {
+            val response = block()
+            val durationMs = elapsedMillis(startTime)
+            logger.handleResponse(methodName, response, attempt, hasAttemptsLeft, durationMs)
+        } catch (cause: HttpRequestTimeoutException) {
+            logger.handleRetryableException(methodName, cause, attempt, hasAttemptsLeft, startTime)
+        } catch (cause: ConnectTimeoutException) {
+            logger.handleRetryableException(methodName, cause, attempt, hasAttemptsLeft, startTime)
+        } catch (cause: UnresolvedAddressException) {
+            logger.handleRetryableException(methodName, cause, attempt, hasAttemptsLeft, startTime)
+        } catch (cause: ServerResponseException) {
+            logger.handleRetryableException(methodName, cause, attempt, hasAttemptsLeft, startTime)
+        } catch (cause: ClientRequestException) {
+            logger.handleRetryableException(methodName, cause, attempt, hasAttemptsLeft, startTime)
+        } catch (cause: IOException) {
+            logger.handleRetryableException(methodName, cause, attempt, hasAttemptsLeft, startTime)
+        } catch (cause: Throwable) {
+            val durationMs = elapsedMillis(startTime)
+            logger.error(
+                "Telegram API {} unexpected failure: type={} durationMs={} attempt={}",
+                methodName,
+                cause.javaClass.simpleName,
+                durationMs,
+                attempt,
+                cause,
+            )
+            AttemptResult.Failure(cause)
+        }
 
     object AllowedUpdates {
         const val MESSAGE = "message"
@@ -275,34 +262,175 @@ class TelegramApiClient(
         const val SUCCESSFUL_PAYMENT = "successful_payment"
         val DEFAULT: List<String> = listOf(MESSAGE, PRE_CHECKOUT_QUERY, SUCCESSFUL_PAYMENT)
     }
-
-    companion object {
-        private const val MAX_RETRIES = 3
-        private const val INITIAL_RETRY_DELAY_MS = 200L
-        private const val MAX_RETRY_DELAY_MS = 800L
-        private const val MAX_ERROR_BODY_PREVIEW = 512
-        private const val NANOS_IN_MILLISECOND = 1_000_000L
-    }
 }
 
-class TelegramApiException(message: String) : RuntimeException(message)
+class TelegramApiException(
+    message: String,
+) : RuntimeException(message)
 
 @Serializable
 private data class SetWebhookRequest(
     val url: String,
-    val secret_token: String,
-    val allowed_updates: List<String>? = null,
-    val max_connections: Int? = null,
+    @SerialName("secret_token")
+    val secretToken: String,
+    @SerialName("allowed_updates")
+    val allowedUpdates: List<String>? = null,
+    @SerialName("max_connections")
+    val maxConnections: Int? = null,
 )
 
 @Serializable
 private data class DeleteWebhookRequest(
-    val drop_pending_updates: Boolean,
+    @SerialName("drop_pending_updates")
+    val dropPendingUpdates: Boolean,
 )
 
 @Serializable
 private data class GetUpdatesRequest(
     val offset: Long?,
     val timeout: Int,
-    val allowed_updates: List<String>? = null,
+    @SerialName("allowed_updates")
+    val allowedUpdates: List<String>? = null,
 )
+
+private fun shouldRetry(
+    response: HttpResponse?,
+    cause: Throwable?,
+): Boolean {
+    if (response != null && response.status.value in SERVER_ERROR_START..SERVER_ERROR_END) {
+        return true
+    }
+    return when (cause) {
+        is HttpRequestTimeoutException -> true
+        is ConnectTimeoutException -> true
+        is UnresolvedAddressException -> true
+        is IOException -> true
+        is ServerResponseException ->
+            cause.response.status.value in SERVER_ERROR_START..SERVER_ERROR_END
+        else -> false
+    }
+}
+
+private fun Logger.handleException(
+    methodName: String,
+    cause: Throwable,
+    attempt: Int,
+    hasAttemptsLeft: Boolean,
+    durationMs: Long,
+): AttemptResult {
+    val willRetry = shouldRetry(null, cause) && hasAttemptsLeft
+    val message = "Telegram API {} failure: type={} durationMs={} attempt={} willRetry={}"
+    return if (willRetry) {
+        warn(message, methodName, cause.javaClass.simpleName, durationMs, attempt, true, cause)
+        AttemptResult.Retry(cause)
+    } else {
+        error(message, methodName, cause.javaClass.simpleName, durationMs, attempt, false, cause)
+        AttemptResult.Failure(cause)
+    }
+}
+
+private fun Logger.handleRetryableException(
+    methodName: String,
+    cause: Throwable,
+    attempt: Int,
+    hasAttemptsLeft: Boolean,
+    startTime: Long,
+): AttemptResult =
+    handleException(
+        methodName,
+        cause,
+        attempt,
+        hasAttemptsLeft,
+        elapsedMillis(startTime),
+    )
+
+private fun Logger.handleResponse(
+    methodName: String,
+    response: HttpResponse,
+    attempt: Int,
+    hasAttemptsLeft: Boolean,
+    durationMs: Long,
+): AttemptResult {
+    val retryable = shouldRetry(response, null)
+    logStatus(methodName, response.status, durationMs, attempt, retryable && hasAttemptsLeft)
+    return when {
+        retryable && hasAttemptsLeft ->
+            AttemptResult.Retry(
+                TelegramApiException(
+                    "Telegram API $methodName returned HTTP ${response.status.value}",
+                ),
+            )
+        retryable ->
+            AttemptResult.Failure(
+                TelegramApiException(
+                    "Telegram API $methodName returned HTTP ${response.status.value}",
+                ),
+            )
+        else -> AttemptResult.Success(response)
+    }
+}
+
+private fun Logger.logStatus(
+    methodName: String,
+    status: HttpStatusCode,
+    durationMs: Long,
+    attempt: Int,
+    willRetry: Boolean,
+) {
+    when {
+        status.value >= SERVER_ERROR_START -> {
+            val message = "Telegram API {} status={} durationMs={} attempt={} willRetry={}"
+            if (willRetry) {
+                warn(message, methodName, status.value, durationMs, attempt, true)
+            } else {
+                error(message, methodName, status.value, durationMs, attempt, false)
+            }
+        }
+        status.value == TOO_MANY_REQUESTS_CODE ->
+            warn(
+                "Telegram API {} status={} durationMs={} attempt={}",
+                methodName,
+                status.value,
+                durationMs,
+                attempt,
+            )
+        status.value >= CLIENT_ERROR_START ->
+            warn(
+                "Telegram API {} status={} durationMs={} attempt={}",
+                methodName,
+                status.value,
+                durationMs,
+                attempt,
+            )
+        else ->
+            info(
+                "Telegram API {} status={} durationMs={}",
+                methodName,
+                status.value,
+                durationMs,
+            )
+    }
+}
+
+private fun nullResultError(methodName: String): Nothing =
+    throw TelegramApiException("Telegram API $methodName returned null result")
+
+private fun nextDelay(current: Long): Long = (current * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
+
+private fun elapsedMillis(startTime: Long): Long = (System.nanoTime() - startTime) / NANOS_IN_MILLISECOND
+
+private fun HttpStatusCode.isSuccess(): Boolean = value in SUCCESS_STATUS_START..SUCCESS_STATUS_END
+
+private sealed interface AttemptResult {
+    data class Success(
+        val response: HttpResponse,
+    ) : AttemptResult
+
+    data class Retry(
+        val cause: Throwable,
+    ) : AttemptResult
+
+    data class Failure(
+        val cause: Throwable,
+    ) : AttemptResult
+}
