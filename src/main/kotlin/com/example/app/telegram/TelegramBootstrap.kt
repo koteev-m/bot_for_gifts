@@ -29,7 +29,12 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
     dispatcher.start(TELEGRAM_WORKER_COUNT)
     log.info("Telegram update dispatcher started with {} worker(s)", TELEGRAM_WORKER_COUNT)
 
-    registerWebhookRoute(config.webhookPath, config.webhookSecretToken, dispatcher)
+    registerWebhookRoute(
+        webhookPath = config.webhookPath,
+        expectedSecretToken = config.webhookSecretToken,
+        dispatcher = dispatcher,
+        meterRegistry = meterRegistry,
+    )
     val adminRoutesInstalled =
         registerAdminRoutes(
             config = config,
@@ -139,6 +144,7 @@ private fun Application.registerWebhookRoute(
     webhookPath: String,
     expectedSecretToken: String,
     dispatcher: UpdateDispatcher,
+    meterRegistry: MeterRegistry,
 ) {
     routing {
         telegramWebhookRoutes(
@@ -146,6 +152,7 @@ private fun Application.registerWebhookRoute(
             expectedSecretToken = expectedSecretToken,
             sink = dispatcher,
             maxBodyBytes = 1_000_000L,
+            meterRegistry = meterRegistry,
         )
     }
     log.info("Telegram webhook route registered at {}", webhookPath)
