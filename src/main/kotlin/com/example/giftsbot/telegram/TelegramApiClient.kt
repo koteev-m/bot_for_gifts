@@ -74,12 +74,14 @@ class TelegramApiClient(
         secretToken: String,
         allowedUpdates: List<String>? = null,
         maxConnections: Int? = null,
+        dropPendingUpdates: Boolean = false,
     ): Boolean {
         logger.debug(
-            "setWebhook request maxConnections={} allowedUpdates={} hasUrl={}",
+            "setWebhook request maxConnections={} allowedUpdates={} hasUrl={} dropPendingUpdates={}",
             maxConnections,
             allowedUpdates,
             url.isNotBlank(),
+            dropPendingUpdates,
         )
         val result =
             execute<Boolean>(
@@ -90,6 +92,7 @@ class TelegramApiClient(
                         secretToken = secretToken,
                         allowedUpdates = allowedUpdates,
                         maxConnections = maxConnections,
+                        dropPendingUpdates = dropPendingUpdates.takeIf { it },
                     ),
             )
         if (result) {
@@ -277,6 +280,8 @@ private data class SetWebhookRequest(
     val allowedUpdates: List<String>? = null,
     @SerialName("max_connections")
     val maxConnections: Int? = null,
+    @SerialName("drop_pending_updates")
+    val dropPendingUpdates: Boolean? = null,
 )
 
 @Serializable
