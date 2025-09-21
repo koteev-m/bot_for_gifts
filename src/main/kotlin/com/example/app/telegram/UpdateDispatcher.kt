@@ -1,8 +1,10 @@
 package com.example.app.telegram
 
+import com.example.app.observability.Metrics
+import com.example.app.observability.MetricsNames
+import com.example.app.observability.MetricsTags
 import com.example.app.telegram.dto.UpdateDto
 import io.micrometer.core.instrument.MeterRegistry
-import io.micrometer.core.instrument.Timer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +38,7 @@ class UpdateDispatcher(
 ) : UpdateSink {
     private val seenUpdates = ConcurrentHashMap<Long, Long>()
     private val queueSize = AtomicInteger(0)
+    private val metrics = QueueMetrics(meterRegistry, queueSize)
     private val channel =
         Channel<IncomingUpdate>(
             capacity = queueCapacity,
@@ -44,14 +47,10 @@ class UpdateDispatcher(
                 queueSize.updateAndGet { current ->
                     if (current > 0) current - 1 else 0
                 }
+                metrics.markDropped()
                 logger.debug("Undelivered update {} removed from queue", it.updateId)
             },
         )
-    private val enqueuedCounter = meterRegistry.counter("telegram_updates_enqueued_total")
-    private val duplicateCounter = meterRegistry.counter("telegram_updates_duplicated_total")
-    private val droppedCounter = meterRegistry.counter("telegram_updates_dropped_total")
-    private val processedCounter = meterRegistry.counter("telegram_updates_processed_total")
-    private val handleTimer: Timer = meterRegistry.timer("telegram_update_handle_seconds")
     private val lifecycleLock = Any()
     private val workerJobs = mutableListOf<Job>()
     private var cleanupJob: Job? = null
@@ -64,13 +63,9 @@ class UpdateDispatcher(
 
     private val cleanupInterval = Duration.ofMinutes(CLEANUP_INTERVAL_MINUTES)
 
-    init {
-        meterRegistry.gauge("telegram_queue_size", queueSize)
-    }
-
     override suspend fun enqueue(update: UpdateDto) {
         if (isClosed) {
-            droppedCounter.increment()
+            metrics.markDropped()
             logger.warn("Dispatcher is closed, dropping update {}", update.update_id)
             return
         }
@@ -119,7 +114,7 @@ class UpdateDispatcher(
         val now = System.currentTimeMillis()
         val previous = seenUpdates.putIfAbsent(updateId, now)
         if (previous != null) {
-            duplicateCounter.increment()
+            metrics.markDuplicate()
             return false
         }
         return true
@@ -132,14 +127,14 @@ class UpdateDispatcher(
             return
         }
         queueSize.incrementAndGet()
-        enqueuedCounter.increment()
+        metrics.markEnqueued()
     }
 
     private fun handleFailedEnqueue(
         incoming: IncomingUpdate,
         result: ChannelResult<Unit>,
     ) {
-        droppedCounter.increment()
+        metrics.markDropped()
         if (result.isClosed) {
             logger.warn("Queue is closed, dropping update {}", incoming.updateId)
         } else {
@@ -161,21 +156,71 @@ class UpdateDispatcher(
     private suspend fun processIncoming(incoming: IncomingUpdate) {
         val startNanos = System.nanoTime()
         try {
+            logger.info("queue processing updateId={}", incoming.updateId)
             val outcome = runCatching { handle(incoming) }
-            outcome.onSuccess { processedCounter.increment() }
+            outcome.onSuccess { metrics.markProcessed() }
             outcome.exceptionOrNull()?.let { throwable ->
                 if (throwable is CancellationException) {
                     throw throwable
                 }
-                logger.error("Failed to handle update {}", incoming.updateId, throwable)
+                logger.error("queue handling failed: updateId={}", incoming.updateId, throwable)
             }
         } finally {
             val elapsedNanos = System.nanoTime() - startNanos
-            handleTimer.record(elapsedNanos, TimeUnit.NANOSECONDS)
+            metrics.recordHandleDuration(elapsedNanos)
         }
     }
 
     private suspend fun handle(incoming: IncomingUpdate) {
-        logger.info("Processed {} with id {}", incoming::class.simpleName, incoming.updateId)
+        logger.info(
+            "queue handled updateId={} type={}",
+            incoming.updateId,
+            incoming::class.simpleName,
+        )
     }
 }
+
+private class QueueMetrics(
+    registry: MeterRegistry,
+    queueSize: AtomicInteger,
+) {
+    private val componentTag = MetricsTags.COMPONENT to QUEUE_COMPONENT
+    private val enqueuedCounter =
+        Metrics.counter(registry, MetricsNames.UPDATES_ENQUEUED_TOTAL, componentTag)
+    private val duplicateCounter =
+        Metrics.counter(registry, MetricsNames.UPDATES_DUPLICATED_TOTAL, componentTag)
+    private val droppedCounter =
+        Metrics.counter(registry, MetricsNames.UPDATES_DROPPED_TOTAL, componentTag)
+    private val processedCounter =
+        Metrics.counter(registry, MetricsNames.UPDATES_PROCESSED_TOTAL, componentTag)
+    private val handleTimer =
+        Metrics.timer(registry, MetricsNames.UPDATE_HANDLE_SECONDS, componentTag)
+
+    init {
+        Metrics.gaugeInt(registry, MetricsNames.QUEUE_SIZE_GAUGE, queueSize, componentTag)
+    }
+
+    fun markEnqueued() {
+        enqueuedCounter.increment()
+    }
+
+    fun markDuplicate() {
+        duplicateCounter.increment()
+    }
+
+    fun markDropped() {
+        droppedCounter.increment()
+    }
+
+    fun markProcessed() {
+        processedCounter.increment()
+    }
+
+    fun recordHandleDuration(durationNanos: Long) {
+        if (durationNanos >= 0) {
+            handleTimer.record(durationNanos, TimeUnit.NANOSECONDS)
+        }
+    }
+}
+
+private const val QUEUE_COMPONENT = "queue"

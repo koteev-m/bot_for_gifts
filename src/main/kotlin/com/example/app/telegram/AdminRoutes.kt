@@ -1,5 +1,8 @@
 package com.example.app.telegram
 
+import com.example.app.observability.Metrics
+import com.example.app.observability.MetricsNames
+import com.example.app.observability.MetricsTags
 import com.example.giftsbot.telegram.TelegramApiClient
 import com.example.giftsbot.telegram.WebhookInfoDto
 import io.ktor.http.HttpStatusCode
@@ -22,6 +25,9 @@ import kotlinx.serialization.SerializationException
 import org.slf4j.LoggerFactory
 
 private const val ADMIN_TOKEN_HEADER = "X-Admin-Token"
+private const val ADMIN_COMPONENT = "admin"
+private const val RESULT_OK = "ok"
+private const val RESULT_ERROR = "error"
 private val logger = LoggerFactory.getLogger("AdminTelegramWebhookRoutes")
 
 @Suppress("LongParameterList")
@@ -60,21 +66,31 @@ private class AdminWebhookContext(
 ) {
     suspend fun handleSet(call: ApplicationCall) {
         if (!call.ensureAdminToken(adminToken)) {
+            metrics.markSetError()
             return
         }
-        val request = call.receiveSetWebhookRequest() ?: return
+        val request = call.receiveSetWebhookRequest()
+        if (request == null) {
+            metrics.markSetError()
+            return
+        }
         when (val validation = validateSetRequest(request)) {
-            is SetWebhookValidation.Error -> call.respondAdminError(validation.status, validation.message)
+            is SetWebhookValidation.Error -> {
+                metrics.markSetError()
+                call.respondAdminError(validation.status, validation.message)
+            }
             is SetWebhookValidation.Success -> processSetWebhook(call, request, validation)
         }
     }
 
     suspend fun handleDelete(call: ApplicationCall) {
         if (!call.ensureAdminToken(adminToken)) {
+            metrics.markDeleteError()
             return
         }
         val dropPendingResult = parseDropPending(call.request.queryParameters["dropPending"])
         if (dropPendingResult == null) {
+            metrics.markDeleteError()
             call.respondAdminError(HttpStatusCode.BadRequest, "invalid_drop_pending")
             return
         }
@@ -83,22 +99,31 @@ private class AdminWebhookContext(
 
     suspend fun handleInfo(call: ApplicationCall) {
         if (!call.ensureAdminToken(adminToken)) {
+            metrics.markInfoError()
             return
         }
-        logger.info("get webhook info: callId={}", call.callId ?: "-")
         val infoResult = runCatching { telegramApiClient.getWebhookInfo() }
         val failure = infoResult.exceptionOrNull()
         if (failure == null) {
             metrics.markInfoSuccess()
-            call.respond(AdminWebhookInfoResponse.from(infoResult.getOrThrow()))
+            val dto = infoResult.getOrThrow()
+            val response = AdminWebhookInfoResponse.from(dto)
+            logger.info(
+                "admin webhook info success: callId={} pendingUpdates={} hasCustomCertificate={}",
+                call.callId ?: "-",
+                response.pendingUpdateCount,
+                response.hasCustomCertificate,
+            )
+            call.respond(response)
             return
         }
         if (failure is CancellationException) {
             throw failure
         }
+        metrics.markInfoError()
         metrics.markFailure()
         logger.error(
-            "getWebhookInfo failed: callId={}",
+            "admin webhook info failed: callId={}",
             call.callId ?: "-",
             failure,
         )
@@ -126,14 +151,6 @@ private class AdminWebhookContext(
         request: AdminSetWebhookRequest,
         params: SetWebhookValidation.Success,
     ) {
-        logger.info(
-            "set webhook: callId={} url={} dropPending={} maxConnections={} allowedUpdates={}",
-            call.callId ?: "-",
-            params.url,
-            params.dropPending,
-            params.maxConnections,
-            request.allowedUpdates,
-        )
         val apiResult =
             runCatching {
                 telegramApiClient.setWebhook(
@@ -147,6 +164,14 @@ private class AdminWebhookContext(
         val failure = apiResult.exceptionOrNull()
         if (failure == null) {
             metrics.markSetSuccess()
+            logger.info(
+                "admin webhook set success: callId={} url={} dropPending={} maxConnections={} allowedUpdates={}",
+                call.callId ?: "-",
+                params.url,
+                params.dropPending,
+                params.maxConnections,
+                request.allowedUpdates,
+            )
             call.respond(
                 AdminSetWebhookResponse(
                     ok = true,
@@ -160,9 +185,10 @@ private class AdminWebhookContext(
         if (failure is CancellationException) {
             throw failure
         }
+        metrics.markSetError()
         metrics.markFailure()
         logger.error(
-            "setWebhook failed: callId={} url={}",
+            "admin webhook set failed: callId={} url={}",
             call.callId ?: "-",
             params.url,
             failure,
@@ -174,24 +200,25 @@ private class AdminWebhookContext(
         call: ApplicationCall,
         dropPending: Boolean,
     ) {
-        logger.info(
-            "delete webhook: callId={} dropPending={}",
-            call.callId ?: "-",
-            dropPending,
-        )
         val apiResult = runCatching { telegramApiClient.deleteWebhook(dropPending) }
         val failure = apiResult.exceptionOrNull()
         if (failure == null) {
             metrics.markDeleteSuccess()
+            logger.info(
+                "admin webhook delete success: callId={} dropPending={}",
+                call.callId ?: "-",
+                dropPending,
+            )
             call.respond(AdminDeleteWebhookResponse(ok = true, dropPending = dropPending))
             return
         }
         if (failure is CancellationException) {
             throw failure
         }
+        metrics.markDeleteError()
         metrics.markFailure()
         logger.error(
-            "deleteWebhook failed: callId={} dropPending={}",
+            "admin webhook delete failed: callId={} dropPending={}",
             call.callId ?: "-",
             dropPending,
             failure,
@@ -216,21 +243,86 @@ private sealed interface SetWebhookValidation {
 private class AdminWebhookMetrics(
     registry: MeterRegistry?,
 ) {
-    private val setCounter = registry?.counter("admin_webhook_set_total")
-    private val deleteCounter = registry?.counter("admin_webhook_delete_total")
-    private val infoCounter = registry?.counter("admin_webhook_info_total")
-    private val failCounter = registry?.counter("admin_webhook_fail_total")
+    private val componentTag = MetricsTags.COMPONENT to ADMIN_COMPONENT
+    private val setOkCounter =
+        registry?.let {
+            Metrics.counter(
+                it,
+                MetricsNames.ADMIN_SET_TOTAL,
+                componentTag,
+                MetricsTags.RESULT to RESULT_OK,
+            )
+        }
+    private val setErrorCounter =
+        registry?.let {
+            Metrics.counter(
+                it,
+                MetricsNames.ADMIN_SET_TOTAL,
+                componentTag,
+                MetricsTags.RESULT to RESULT_ERROR,
+            )
+        }
+    private val deleteOkCounter =
+        registry?.let {
+            Metrics.counter(
+                it,
+                MetricsNames.ADMIN_DELETE_TOTAL,
+                componentTag,
+                MetricsTags.RESULT to RESULT_OK,
+            )
+        }
+    private val deleteErrorCounter =
+        registry?.let {
+            Metrics.counter(
+                it,
+                MetricsNames.ADMIN_DELETE_TOTAL,
+                componentTag,
+                MetricsTags.RESULT to RESULT_ERROR,
+            )
+        }
+    private val infoOkCounter =
+        registry?.let {
+            Metrics.counter(
+                it,
+                MetricsNames.ADMIN_INFO_TOTAL,
+                componentTag,
+                MetricsTags.RESULT to RESULT_OK,
+            )
+        }
+    private val infoErrorCounter =
+        registry?.let {
+            Metrics.counter(
+                it,
+                MetricsNames.ADMIN_INFO_TOTAL,
+                componentTag,
+                MetricsTags.RESULT to RESULT_ERROR,
+            )
+        }
+    private val failCounter =
+        registry?.let { Metrics.counter(it, MetricsNames.ADMIN_FAIL_TOTAL, componentTag) }
 
     fun markSetSuccess() {
-        setCounter?.increment()
+        setOkCounter?.increment()
+    }
+
+    fun markSetError() {
+        setErrorCounter?.increment()
     }
 
     fun markDeleteSuccess() {
-        deleteCounter?.increment()
+        deleteOkCounter?.increment()
+    }
+
+    fun markDeleteError() {
+        deleteErrorCounter?.increment()
     }
 
     fun markInfoSuccess() {
-        infoCounter?.increment()
+        infoOkCounter?.increment()
+    }
+
+    fun markInfoError() {
+        infoErrorCounter?.increment()
     }
 
     fun markFailure() {
