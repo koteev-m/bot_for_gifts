@@ -9,9 +9,8 @@ import com.example.app.plugins.installMicrometerMetrics
 import com.example.app.plugins.installRequestLogging
 import com.example.app.plugins.installStatusPages
 import com.example.app.routes.infrastructureRoutes
-import com.example.app.telegram.adminTelegramWebhookRoutes
+import com.example.app.telegram.installTelegramIntegration
 import com.example.app.util.configValue
-import com.example.giftsbot.telegram.TelegramApiClient
 import com.typesafe.config.ConfigFactory
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -72,80 +71,19 @@ fun Application.module() {
         )
     }
 
-    val telegramConfig = loadTelegramConfig()
-    val telegramApiClient = TelegramApiClient(telegramConfig.botToken)
-
     val miniCasesConfigService = MiniCasesConfigService()
-
-    routing {
-        infrastructureRoutes(healthPath, metricsPath, prometheusRegistry)
-        registerMiniAppRoutes(miniAppRoot, miniAppIndex)
-        registerMiniAppApiRoutes(telegramConfig.botToken, miniCasesConfigService)
-        adminTelegramWebhookRoutes(
-            adminToken = telegramConfig.adminToken,
-            telegramApiClient = telegramApiClient,
-            publicBaseUrl = telegramConfig.publicBaseUrl,
-            webhookPath = telegramConfig.webhookPath,
-            webhookSecretToken = telegramConfig.webhookSecretToken,
-            meterRegistry = prometheusRegistry,
-        )
-    }
-}
-
-private fun Application.loadTelegramConfig(): TelegramConfig {
-    val botToken =
+    val miniAppBotToken =
         configValue(
             propertyKeys = listOf("bot.token", "telegram.bot.token"),
             envKeys = listOf("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
             configKeys = listOf("app.telegram.botToken", "telegram.botToken"),
         )?.takeUnless { it.isBlank() }
-            ?: error("Telegram bot token is not configured; admin webhook routes require BOT_TOKEN.")
 
-    val adminToken =
-        configValue(
-            propertyKeys = listOf("admin.token"),
-            envKeys = listOf("ADMIN_TOKEN"),
-            configKeys = listOf("app.admin.token"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("ADMIN_TOKEN is not configured.")
+    installTelegramIntegration(meterRegistry = prometheusRegistry)
 
-    val publicBaseUrl =
-        configValue(
-            propertyKeys = listOf("telegram.publicBaseUrl"),
-            envKeys = listOf("PUBLIC_BASE_URL"),
-            configKeys = listOf("app.telegram.publicBaseUrl"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("PUBLIC_BASE_URL is not configured.")
-
-    val webhookPath =
-        configValue(
-            propertyKeys = listOf("telegram.webhookPath"),
-            envKeys = listOf("WEBHOOK_PATH"),
-            configKeys = listOf("app.telegram.webhookPath"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("WEBHOOK_PATH is not configured.")
-
-    val webhookSecretToken =
-        configValue(
-            propertyKeys = listOf("telegram.webhookSecretToken"),
-            envKeys = listOf("WEBHOOK_SECRET_TOKEN"),
-            configKeys = listOf("app.telegram.webhookSecretToken"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("WEBHOOK_SECRET_TOKEN is not configured.")
-
-    return TelegramConfig(
-        botToken = botToken,
-        adminToken = adminToken,
-        publicBaseUrl = publicBaseUrl,
-        webhookPath = webhookPath,
-        webhookSecretToken = webhookSecretToken,
-    )
+    routing {
+        infrastructureRoutes(healthPath, metricsPath, prometheusRegistry)
+        registerMiniAppRoutes(miniAppRoot, miniAppIndex)
+        registerMiniAppApiRoutes(miniAppBotToken, miniCasesConfigService)
+    }
 }
-
-private data class TelegramConfig(
-    val botToken: String,
-    val adminToken: String,
-    val publicBaseUrl: String,
-    val webhookPath: String,
-    val webhookSecretToken: String,
-)
