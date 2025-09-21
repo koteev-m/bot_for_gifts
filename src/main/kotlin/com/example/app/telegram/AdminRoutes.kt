@@ -3,8 +3,8 @@ package com.example.app.telegram
 import com.example.giftsbot.telegram.TelegramApiClient
 import com.example.giftsbot.telegram.WebhookInfoDto
 import io.ktor.http.HttpStatusCode
-import io.ktor.serialization.ContentTransformationException
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.request.header
 import io.ktor.server.request.httpMethod
