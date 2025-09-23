@@ -85,6 +85,13 @@ private fun Application.findExistingPrometheusRegistry(): PrometheusMeterRegistr
             ?.let { field ->
                 field.isAccessible = true
                 field.get(pluginInstance)
-            }
+    }
     return registry as? PrometheusMeterRegistry
+}
+
+fun Application.testPrometheusRegistry(): PrometheusMeterRegistry? {
+    if (!attributes.contains(meterRegistryAttribute)) {
+        return null
+    }
+    return attributes[meterRegistryAttribute]
 }
