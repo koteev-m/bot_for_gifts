@@ -55,6 +55,7 @@ dependencies {
 
     implementation(libs.dotenv.kotlin)
     implementation(libs.snakeyaml)
+    implementation(libs.kaml)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
