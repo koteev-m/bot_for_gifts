@@ -6,27 +6,32 @@ import com.example.app.observability.MetricsTags
 import com.example.app.telegram.dto.UpdateDto
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ChannelResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 private const val DEFAULT_QUEUE_CAPACITY = 10_000
 private const val DEFAULT_DEDUP_TTL_HOURS = 26L
 private const val CLEANUP_INTERVAL_MINUTES = 15L
+private const val DEFAULT_CLOSE_TIMEOUT_SECONDS = 5L
+private val DEFAULT_CLOSE_TIMEOUT: Duration = Duration.ofSeconds(DEFAULT_CLOSE_TIMEOUT_SECONDS)
 
 class UpdateDispatcher(
     private val scope: CoroutineScope,
@@ -36,122 +41,150 @@ class UpdateDispatcher(
     private val workers: Int = 1,
     private val logger: Logger = LoggerFactory.getLogger(UpdateDispatcher::class.java),
 ) : UpdateSink {
-    private val seenUpdates = ConcurrentHashMap<Long, Long>()
+    private val started = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
+
     private val queueSize = AtomicInteger(0)
     private val metrics = QueueMetrics(meterRegistry, queueSize)
+
     private val channel =
         Channel<IncomingUpdate>(
             capacity = queueCapacity,
             onBufferOverflow = BufferOverflow.DROP_OLDEST,
-            onUndeliveredElement = {
-                queueSize.updateAndGet { current ->
-                    if (current > 0) current - 1 else 0
-                }
+            onUndeliveredElement = { incoming ->
+                decrementQueueGauge()
                 metrics.markDropped()
-                logger.debug("Undelivered update {} removed from queue", it.updateId)
+                logger.debug("Undelivered update {} removed from queue", incoming.updateId)
             },
         )
-    private val lifecycleLock = Any()
+
+    private val seen = ConcurrentHashMap<Long, Long>()
     private val workerJobs = mutableListOf<Job>()
     private var cleanupJob: Job? = null
+    private val activeWorkers = AtomicInteger(0)
 
     @Volatile
-    private var isStarted = false
-
-    @Volatile
-    private var isClosed = false
+    private var workersCompletion: CompletableDeferred<Unit> =
+        CompletableDeferred<Unit>().apply { complete(Unit) }
+    private val workerExceptionHandler =
+        CoroutineExceptionHandler { _, throwable ->
+            if (throwable !is CancellationException) {
+                logger.error("Worker crashed", throwable)
+            }
+        }
+    private val cleanupExceptionHandler =
+        CoroutineExceptionHandler { _, throwable ->
+            if (throwable !is CancellationException) {
+                logger.error("Cleanup job crashed", throwable)
+            }
+        }
 
     private val cleanupInterval = Duration.ofMinutes(CLEANUP_INTERVAL_MINUTES)
 
+    fun start(workers: Int = this.workers) {
+        if (closed.get()) {
+            logger.warn("Dispatcher already closed")
+            return
+        }
+        if (!started.compareAndSet(false, true)) {
+            logger.warn("UpdateDispatcher is already started")
+            return
+        }
+
+        val workerCount = workers.coerceAtLeast(1)
+        activeWorkers.set(workerCount)
+        workersCompletion = CompletableDeferred()
+        repeat(workerCount) { index ->
+            val job =
+                scope.launch(workerExceptionHandler + Dispatchers.IO + CoroutineName("dispatcher-worker-$index")) {
+                    try {
+                        for (incoming in channel) {
+                            decrementQueueGauge()
+                            processIncoming(incoming)
+                        }
+                    } finally {
+                        if (activeWorkers.decrementAndGet() == 0 && !workersCompletion.isCompleted) {
+                            workersCompletion.complete(Unit)
+                        }
+                    }
+                }
+            workerJobs += job
+        }
+
+        cleanupJob =
+            scope
+                .launch(cleanupExceptionHandler + Dispatchers.IO + CoroutineName("dispatcher-cleanup")) {
+                    while (isActive) {
+                        delay(cleanupInterval.toMillis())
+                        val threshold = System.currentTimeMillis() - dedupTtl.toMillis()
+                        seen.entries.removeIf { it.value < threshold }
+                    }
+                }.also { job ->
+                    job.invokeOnCompletion { cause ->
+                        if (cause is CancellationException) {
+                            logger.debug("Cleanup job cancelled")
+                        }
+                    }
+                }
+
+        logger.info(
+            "UpdateDispatcher started: workers={}, capacity={}, ttl={}",
+            workerCount,
+            queueCapacity,
+            dedupTtl,
+        )
+    }
+
     override suspend fun enqueue(update: UpdateDto) {
-        if (isClosed) {
+        if (closed.get()) {
             metrics.markDropped()
-            logger.warn("Dispatcher is closed, dropping update {}", update.update_id)
+            logger.warn("enqueue called after close; dropping update_id={}", update.update_id)
             return
         }
 
         if (markSeen(update.update_id)) {
-            deliverToChannel(update.toIncoming())
-        }
-    }
-
-    fun start(workers: Int = this.workers) {
-        synchronized(lifecycleLock) {
-            check(!isClosed) { "Dispatcher already closed" }
-            if (isStarted) {
-                logger.warn("UpdateDispatcher is already started")
-                return
-            }
-            isStarted = true
-            val workerCount = workers.coerceAtLeast(1)
-            repeat(workerCount) { workerIndex ->
-                workerJobs += startWorker(workerIndex)
-            }
-            cleanupJob =
-                scope.launch(Dispatchers.IO) {
-                    while (isActive) {
-                        delay(cleanupInterval.toMillis())
-                        val threshold = System.currentTimeMillis() - dedupTtl.toMillis()
-                        seenUpdates.entries.removeIf { it.value < threshold }
-                    }
+            val incoming = update.toIncoming()
+            val result = channel.trySend(incoming)
+            if (result.isSuccess) {
+                incrementQueueGauge()
+                metrics.markEnqueued()
+            } else {
+                metrics.markDropped()
+                if (result.isClosed) {
+                    logger.warn("Queue is closed, dropping update {}", incoming.updateId)
+                } else {
+                    logger.warn("Queue overflow, dropping update {}", incoming.updateId)
                 }
+            }
         }
     }
 
-    suspend fun close() {
-        synchronized(lifecycleLock) {
-            if (isClosed) {
-                return
-            }
-            isClosed = true
+    suspend fun close(timeout: Duration = DEFAULT_CLOSE_TIMEOUT) {
+        if (!closed.compareAndSet(false, true)) {
+            return
         }
         channel.close()
-        cleanupJob?.cancelAndJoin()
-        workerJobs.joinAll()
+
+        runBlocking {
+            workersCompletion.await()
+            cleanupJob?.cancelAndJoin()
+        }
+
+        logger.info(
+            "UpdateDispatcher closed: workers joined, cleanup stopped (timeout={}ms)",
+            timeout.toMillis(),
+        )
     }
 
     private fun markSeen(updateId: Long): Boolean {
         val now = System.currentTimeMillis()
-        val previous = seenUpdates.putIfAbsent(updateId, now)
+        val previous = seen.putIfAbsent(updateId, now)
         if (previous != null) {
             metrics.markDuplicate()
             return false
         }
         return true
     }
-
-    private fun deliverToChannel(incoming: IncomingUpdate) {
-        val result = channel.trySend(incoming)
-        if (!result.isSuccess) {
-            handleFailedEnqueue(incoming, result)
-            return
-        }
-        queueSize.incrementAndGet()
-        metrics.markEnqueued()
-    }
-
-    private fun handleFailedEnqueue(
-        incoming: IncomingUpdate,
-        result: ChannelResult<Unit>,
-    ) {
-        metrics.markDropped()
-        if (result.isClosed) {
-            logger.warn("Queue is closed, dropping update {}", incoming.updateId)
-        } else {
-            logger.warn("Queue overflow, dropping update {}", incoming.updateId)
-        }
-    }
-
-    private fun startWorker(index: Int): Job =
-        scope.launch(Dispatchers.IO) {
-            for (incoming in channel) {
-                queueSize.updateAndGet { current ->
-                    if (current > 0) current - 1 else 0
-                }
-                processIncoming(incoming)
-            }
-            logger.info("Worker {} stopped", index)
-        }
 
     private suspend fun processIncoming(incoming: IncomingUpdate) {
         val startNanos = System.nanoTime()
@@ -177,6 +210,16 @@ class UpdateDispatcher(
             incoming.updateId,
             incoming::class.simpleName,
         )
+    }
+
+    private fun incrementQueueGauge() {
+        queueSize.incrementAndGet()
+    }
+
+    private fun decrementQueueGauge() {
+        queueSize.updateAndGet { current ->
+            if (current > 0) current - 1 else 0
+        }
     }
 }
 

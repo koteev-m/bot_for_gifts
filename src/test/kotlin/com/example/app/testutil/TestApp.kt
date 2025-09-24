@@ -85,7 +85,7 @@ private fun Application.findExistingPrometheusRegistry(): PrometheusMeterRegistr
             ?.let { field ->
                 field.isAccessible = true
                 field.get(pluginInstance)
-    }
+            }
     return registry as? PrometheusMeterRegistry
 }
 
