@@ -38,6 +38,9 @@
 - `./gradlew staticCheck`
 - `./gradlew run`
 
+## Documentation
+- [Telegram Integration Operations Guide](docs/telegram-integration.md)
+
 ## Сервер приложения
 
 ### Что делает сервис
