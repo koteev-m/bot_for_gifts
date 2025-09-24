@@ -2,6 +2,7 @@ package com.example.giftsbot.economy
 
 import com.charleskorn.kaml.Yaml
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.decodeFromString
 import java.util.Locale
 
 object CasesYamlLoader {
@@ -15,7 +16,10 @@ object CasesYamlLoader {
     fun loadFromResources(path: String = DEFAULT_PATH): CasesRoot {
         val loader = Thread.currentThread().contextClassLoader ?: CasesYamlLoader::class.java.classLoader
         val stream = loader?.getResourceAsStream(path) ?: error("Cases config resource '$path' is not available")
-        return stream.use { input -> Yaml.default.decodeFromStream(CasesRoot.serializer(), input) }
+        return stream.use { input ->
+            val content = input.bufferedReader().use { reader -> reader.readText() }
+            Yaml.default.decodeFromString(CasesRoot.serializer(), content)
+        }
     }
 
     fun computePreview(case: CaseConfig): CasePreview {
