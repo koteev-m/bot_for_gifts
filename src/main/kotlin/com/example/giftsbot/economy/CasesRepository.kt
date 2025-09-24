@@ -3,6 +3,7 @@ package com.example.giftsbot.economy
 import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsTags
 import io.micrometer.core.instrument.MeterRegistry
+import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicReference
 
@@ -108,6 +109,7 @@ class CasesRepository(
     }
 }
 
+@Serializable
 data class CasesValidationSummary(
     val total: Int,
     val ok: Int,

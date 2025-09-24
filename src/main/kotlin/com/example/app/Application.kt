@@ -1,7 +1,6 @@
 package com.example.app
 
 import com.example.app.logging.applicationLogger
-import com.example.app.miniapp.MiniCasesConfigService
 import com.example.app.plugins.installCallIdPlugin
 import com.example.app.plugins.installDefaultSecurityHeaders
 import com.example.app.plugins.installJsonSerialization
@@ -11,6 +10,8 @@ import com.example.app.plugins.installStatusPages
 import com.example.app.routes.infrastructureRoutes
 import com.example.app.telegram.installTelegramIntegration
 import com.example.app.util.configValue
+import com.example.giftsbot.economy.CasesRepository
+import com.example.giftsbot.economy.economyRoutes
 import com.typesafe.config.ConfigFactory
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -71,19 +72,21 @@ fun Application.module() {
         )
     }
 
-    val miniCasesConfigService = MiniCasesConfigService()
-    val miniAppBotToken =
+    val economyAdminToken =
         configValue(
-            propertyKeys = listOf("bot.token", "telegram.bot.token"),
-            envKeys = listOf("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
-            configKeys = listOf("app.telegram.botToken", "telegram.botToken"),
+            propertyKeys = listOf("economy.admin.token", "economy.adminToken"),
+            envKeys = listOf("ECONOMY_ADMIN_TOKEN"),
+            configKeys = listOf("app.economy.adminToken"),
         )?.takeUnless { it.isBlank() }
+
+    val casesRepository = CasesRepository(meterRegistry = prometheusRegistry)
+    casesRepository.reload()
 
     installTelegramIntegration(meterRegistry = prometheusRegistry)
 
     routing {
         infrastructureRoutes(healthPath, metricsPath, prometheusRegistry)
         registerMiniAppRoutes(miniAppRoot, miniAppIndex)
-        registerMiniAppApiRoutes(miniAppBotToken, miniCasesConfigService)
+        economyRoutes(casesRepository, economyAdminToken)
     }
 }
