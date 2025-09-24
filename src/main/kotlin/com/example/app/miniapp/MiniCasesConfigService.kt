@@ -121,7 +121,7 @@ class MiniCasesConfigService(
 
     companion object {
         private val UTF8 = StandardCharsets.UTF_8
-        private const val DEFAULT_RESOURCE_NAME = "cases.yaml"
+        private const val DEFAULT_RESOURCE_NAME = "config/cases.yaml"
         private val logger = LoggerFactory.getLogger(MiniCasesConfigService::class.java)
     }
 }

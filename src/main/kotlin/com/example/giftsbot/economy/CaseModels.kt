@@ -18,7 +18,7 @@ enum class CaseSlotType {
     GIFT,
 
     @SerialName("INTERNAL")
-    INTERNAL
+    INTERNAL,
 }
 
 @Serializable
@@ -26,23 +26,23 @@ data class PrizeItemConfig(
     val id: String,
     val type: CaseSlotType,
     val starCost: Long? = null,
-    val probabilityPpm: Int
+    val probabilityPpm: Int,
 )
 
 @Serializable
 data class CaseConfig(
     val id: String,
-    val title: String,
+    val title: String = id,
     val priceStars: Long,
     val rtpExtMin: Double,
     val rtpExtMax: Double,
     val jackpotAlpha: Double,
-    val items: List<PrizeItemConfig>
+    val items: List<PrizeItemConfig>,
 )
 
 @Serializable
 data class CasesRoot(
-    val cases: List<CaseConfig>
+    val cases: List<CaseConfig>,
 )
 
 @Serializable
@@ -50,5 +50,5 @@ data class PublicCaseDto(
     val id: String,
     val title: String,
     val priceStars: Long,
-    val thumbnail: String? = null
+    val thumbnail: String? = null,
 )
