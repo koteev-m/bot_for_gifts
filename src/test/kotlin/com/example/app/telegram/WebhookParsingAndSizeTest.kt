@@ -132,7 +132,10 @@ private fun Application.stubJsonErrorResponses() {
     }
 }
 
-private suspend fun awaitEnqueueCalls(sink: RecordingSink, expectedCalls: Int) {
+private suspend fun awaitEnqueueCalls(
+    sink: RecordingSink,
+    expectedCalls: Int,
+) {
     withTimeout(1_000) {
         while (sink.enqueueCalls() < expectedCalls) {
             delay(10)
