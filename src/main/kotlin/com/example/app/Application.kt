@@ -1,5 +1,6 @@
 package com.example.app
 
+import com.example.app.economy.installEconomyIntegration
 import com.example.app.logging.applicationLogger
 import com.example.app.plugins.installCallIdPlugin
 import com.example.app.plugins.installDefaultSecurityHeaders
@@ -10,8 +11,6 @@ import com.example.app.plugins.installStatusPages
 import com.example.app.routes.infrastructureRoutes
 import com.example.app.telegram.installTelegramIntegration
 import com.example.app.util.configValue
-import com.example.giftsbot.economy.CasesRepository
-import com.example.giftsbot.economy.economyRoutes
 import com.typesafe.config.ConfigFactory
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -72,21 +71,11 @@ fun Application.module() {
         )
     }
 
-    val economyAdminToken =
-        configValue(
-            propertyKeys = listOf("economy.admin.token", "economy.adminToken"),
-            envKeys = listOf("ECONOMY_ADMIN_TOKEN"),
-            configKeys = listOf("app.economy.adminToken"),
-        )?.takeUnless { it.isBlank() }
-
-    val casesRepository = CasesRepository(meterRegistry = prometheusRegistry)
-    casesRepository.reload()
-
+    installEconomyIntegration(meterRegistry = prometheusRegistry)
     installTelegramIntegration(meterRegistry = prometheusRegistry)
 
     routing {
         infrastructureRoutes(healthPath, metricsPath, prometheusRegistry)
         registerMiniAppRoutes(miniAppRoot, miniAppIndex)
-        economyRoutes(casesRepository, economyAdminToken)
     }
 }

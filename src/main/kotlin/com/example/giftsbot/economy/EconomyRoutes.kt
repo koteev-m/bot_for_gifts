@@ -30,7 +30,7 @@ fun Route.economyRoutes(
 
     val token = adminToken?.takeUnless { it.isBlank() }
     if (token == null) {
-        logger.warn("ECONOMY_ADMIN_TOKEN is not configured. Economy admin routes will not be registered.")
+        logger.warn("ADMIN_TOKEN is not configured. Economy admin routes will not be registered.")
         return
     }
 
