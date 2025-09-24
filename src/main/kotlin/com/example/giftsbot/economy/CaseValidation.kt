@@ -9,7 +9,7 @@ data class CasePreview(
     val evExt: Double,
     val rtpExt: Double,
     val sumPpm: Int,
-    val alpha: Double
+    val alpha: Double,
 )
 
 @Serializable
@@ -17,5 +17,5 @@ data class CaseValidationReport(
     val caseId: String,
     val isOk: Boolean,
     val problems: List<String>,
-    val preview: CasePreview
+    val preview: CasePreview,
 )
