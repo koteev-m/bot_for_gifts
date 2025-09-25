@@ -48,6 +48,8 @@ class CasesRepository(
         return CasesYamlLoader.computePreview(case)
     }
 
+    fun get(caseId: String): CaseConfig? = rootRef.get().cases.firstOrNull { it.id == caseId }
+
     fun validateAll(): CasesValidationSummary {
         val summary = validateInternal(rootRef.get())
         logSummary("Validated cases", summary)
