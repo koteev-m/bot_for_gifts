@@ -46,6 +46,8 @@ hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
 postgresql = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
 jdbi-core = { module = "org.jdbi:jdbi3-core", version.ref = "jdbi" }
 jdbi-sqlobject = { module = "org.jdbi:jdbi3-sqlobject", version.ref = "jdbi" }
+jdbi-kotlin = { module = "org.jdbi:jdbi3-kotlin", version.ref = "jdbi" }
+jdbi-kotlin-sqlobject = { module = "org.jdbi:jdbi3-kotlin-sqlobject", version.ref = "jdbi" }
 dotenv-kotlin = { module = "io.github.cdimascio:dotenv-kotlin", version.ref = "dotenv" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
