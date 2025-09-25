@@ -67,25 +67,26 @@ class CasesYamlLoaderTest {
                 rtpExtMin = 0.1,
                 rtpExtMax = 0.2,
                 jackpotAlpha = 0.5,
-                items = listOf(
-                    PrizeItemConfig(
-                        id = "bad-negative",
-                        type = CaseSlotType.GIFT,
-                        starCost = -10,
-                        probabilityPpm = 600_000,
+                items =
+                    listOf(
+                        PrizeItemConfig(
+                            id = "bad-negative",
+                            type = CaseSlotType.GIFT,
+                            starCost = -10,
+                            probabilityPpm = 600_000,
+                        ),
+                        PrizeItemConfig(
+                            id = "bad-high",
+                            type = CaseSlotType.GIFT,
+                            starCost = 1_000,
+                            probabilityPpm = 300_000,
+                        ),
+                        PrizeItemConfig(
+                            id = "bad-internal",
+                            type = CaseSlotType.INTERNAL,
+                            probabilityPpm = 200_001,
+                        ),
                     ),
-                    PrizeItemConfig(
-                        id = "bad-high",
-                        type = CaseSlotType.GIFT,
-                        starCost = 1_000,
-                        probabilityPpm = 300_000,
-                    ),
-                    PrizeItemConfig(
-                        id = "bad-internal",
-                        type = CaseSlotType.INTERNAL,
-                        probabilityPpm = 200_001,
-                    ),
-                ),
             )
 
         val report = CasesYamlLoader.validate(invalidCase)
