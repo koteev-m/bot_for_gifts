@@ -52,6 +52,8 @@ dependencies {
     implementation(libs.postgresql)
     implementation(libs.jdbi.core)
     implementation(libs.jdbi.sqlobject)
+    implementation(libs.jdbi.kotlin)
+    implementation(libs.jdbi.kotlin.sqlobject)
 
     implementation(libs.dotenv.kotlin)
     implementation(libs.snakeyaml)
