@@ -62,6 +62,8 @@ fun toHex(bytes: ByteArray): String {
     return builder.toString()
 }
 
+fun fromHex(value: String): ByteArray = decodeHex(value)
+
 private fun decodeHex(value: String): ByteArray {
     val cleaned = value.trim()
     require(cleaned.length % HEX_CHAR_GROUP == 0) { "Hex value must have even length" }

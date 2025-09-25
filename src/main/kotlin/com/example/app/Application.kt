@@ -8,6 +8,7 @@ import com.example.app.plugins.installJsonSerialization
 import com.example.app.plugins.installMicrometerMetrics
 import com.example.app.plugins.installRequestLogging
 import com.example.app.plugins.installStatusPages
+import com.example.app.rng.installRngIntegration
 import com.example.app.routes.infrastructureRoutes
 import com.example.app.telegram.installTelegramIntegration
 import com.example.app.util.configValue
@@ -72,6 +73,7 @@ fun Application.module() {
     }
 
     installEconomyIntegration(meterRegistry = prometheusRegistry)
+    installRngIntegration(meterRegistry = prometheusRegistry)
     installTelegramIntegration(meterRegistry = prometheusRegistry)
 
     routing {

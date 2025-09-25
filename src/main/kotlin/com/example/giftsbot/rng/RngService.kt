@@ -4,6 +4,7 @@ import com.example.app.observability.Metrics
 import com.example.giftsbot.economy.CaseConfig
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.economy.PrizeItemConfig
+import com.example.giftsbot.rng.Fairness.receiptFor
 import io.micrometer.core.instrument.MeterRegistry
 import java.time.Clock
 import java.time.Instant
@@ -66,8 +67,50 @@ class RngService(
                 resultItemId = resultItemId,
             )
         updateDrawCounters(beforeInsert, record)
-        val receipt = Fairness.receiptFor(commit.serverSeedHash, serverSeed, userId, nonce, caseId, dayUtc)
+        val receipt = receiptFor(commit.serverSeedHash, serverSeed, userId, nonce, caseId, dayUtc)
         return RngDrawResult(record, receipt)
+    }
+
+    val currentDay: LocalDate
+        get() = todayUtc()
+
+    fun verify(
+        dayUtc: LocalDate,
+        serverSeed: String,
+        userId: Long,
+        nonce: String,
+        caseId: String,
+    ): RngVerificationOutcome {
+        val commit = commitStore.getCommit(dayUtc)
+        val normalizedSeed = serverSeed.trim()
+        val serverSeedBytes =
+            if (normalizedSeed.isEmpty()) {
+                null
+            } else {
+                runCatching { fromHex(normalizedSeed) }.getOrNull()
+            }
+
+        return when {
+            commit == null -> RngVerificationOutcome.CommitMissing
+            normalizedSeed.isEmpty() -> RngVerificationOutcome.InvalidServerSeed
+            serverSeedBytes == null -> RngVerificationOutcome.InvalidServerSeed
+            else -> {
+                val serverSeedHash = toHex(sha256(serverSeedBytes))
+                if (!commit.serverSeedHash.equals(serverSeedHash, ignoreCase = true)) {
+                    RngVerificationOutcome.ServerSeedMismatch
+                } else {
+                    val ppm = Fairness.rollPpm(serverSeedBytes, userId, nonce, caseId)
+                    val rollHex = Fairness.rollHex(serverSeedBytes, userId, nonce, caseId)
+                    val result =
+                        RngVerificationResult(
+                            ppm = ppm,
+                            rollHex = rollHex,
+                            serverSeedHash = serverSeedHash,
+                        )
+                    RngVerificationOutcome.Success(result)
+                }
+            }
+        }
     }
 
     private fun recordCommit(state: RngCommitState): RngCommitState {
@@ -137,3 +180,21 @@ data class RngDrawResult(
     val record: RngDrawRecord,
     val receipt: RngReceipt,
 )
+
+data class RngVerificationResult(
+    val ppm: Int,
+    val rollHex: String,
+    val serverSeedHash: String,
+)
+
+sealed interface RngVerificationOutcome {
+    data class Success(
+        val result: RngVerificationResult,
+    ) : RngVerificationOutcome
+
+    data object CommitMissing : RngVerificationOutcome
+
+    data object InvalidServerSeed : RngVerificationOutcome
+
+    data object ServerSeedMismatch : RngVerificationOutcome
+}
