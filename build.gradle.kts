@@ -71,6 +71,7 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+    environment("FAIRNESS_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 }
 
 ktlint {
