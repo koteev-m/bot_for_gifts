@@ -1,3 +1,4 @@
+import org.flywaydb.gradle.task.AbstractFlywayTask
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,6 +7,7 @@ plugins {
     application
     alias(libs.plugins.ktlint)
     alias(libs.plugins.detekt)
+    alias(libs.plugins.flyway)
 }
 
 java {
@@ -67,6 +69,23 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
+val flywayUrl = System.getenv("DATABASE_URL")?.takeUnless { it.isBlank() }
+val flywayUser = System.getenv("DATABASE_USER")?.takeUnless { it.isBlank() }
+val flywayPassword = System.getenv("DATABASE_PASSWORD")?.takeUnless { it.isBlank() }
+
+flyway {
+    locations = arrayOf("filesystem:src/main/resources/db/migration")
+    if (flywayUrl != null) {
+        url = flywayUrl
+    }
+    if (flywayUser != null) {
+        user = flywayUser
+    }
+    if (flywayPassword != null) {
+        password = flywayPassword
+    }
+}
+
 application {
     mainClass.set("com.example.app.ApplicationKt")
 }
@@ -109,4 +128,20 @@ tasks.register("staticCheck") {
     group = "verification"
     description = "Executes static analysis and tests."
     dependsOn("ktlintCheck", "detekt", "test")
+}
+
+tasks.register("verifyAll") {
+    group = "verification"
+    description = "Runs code style checks, static analysis, and tests."
+    dependsOn("ktlintCheck", "detekt", "test")
+}
+
+tasks.withType<AbstractFlywayTask>().configureEach {
+    onlyIf {
+        if (flywayUrl == null) {
+            logger.lifecycle("Skipping Flyway task $name because DATABASE_URL is not configured.")
+            return@onlyIf false
+        }
+        true
+    }
 }
