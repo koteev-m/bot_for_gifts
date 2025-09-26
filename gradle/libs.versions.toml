@@ -17,6 +17,7 @@ ktlint = "13.1.0"
 detekt = "1.23.8"
 versions-plugin = "0.52.0"
 snakeyaml = "2.3"
+flyway = "11.1.0"
 
 [libraries]
 kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -62,3 +63,4 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
 versions = { id = "com.github.ben-manes.versions", version.ref = "versions-plugin" }
+flyway = { id = "org.flywaydb.flyway", version.ref = "flyway" }
