@@ -169,6 +169,31 @@ class TelegramApiClient(
         throw TelegramApiException("Telegram API answerPreCheckoutQuery returned false result")
     }
 
+    suspend fun sendMessage(
+        chatId: Long,
+        text: String,
+        disableNotification: Boolean? = null,
+        replyToMessageId: Long? = null,
+    ): MessageDto {
+        logger.debug(
+            "sendMessage request chatId={} disableNotification={} replyToMessageId={} textLength={}",
+            chatId,
+            disableNotification,
+            replyToMessageId,
+            text.length,
+        )
+        return execute(
+            methodName = "sendMessage",
+            body =
+                SendMessageRequest(
+                    chatId = chatId,
+                    text = text,
+                    disableNotification = disableNotification,
+                    replyToMessageId = replyToMessageId,
+                ),
+        )
+    }
+
     suspend fun getUpdates(
         offset: Long?,
         timeoutSeconds: Int,
@@ -342,6 +367,17 @@ private data class AnswerPreCheckoutQueryRequest(
     val ok: Boolean,
     @SerialName("error_message")
     val errorMessage: String? = null,
+)
+
+@Serializable
+private data class SendMessageRequest(
+    @SerialName("chat_id")
+    val chatId: Long,
+    val text: String,
+    @SerialName("disable_notification")
+    val disableNotification: Boolean? = null,
+    @SerialName("reply_to_message_id")
+    val replyToMessageId: Long? = null,
 )
 
 @Serializable
