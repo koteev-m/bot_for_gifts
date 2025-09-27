@@ -1,5 +1,11 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState
+} from 'react';
+import { openInvoice } from './lib/pay';
 import {
   ResolvedTelegramTheme,
   initializeTelegramWebApp,
@@ -20,6 +26,13 @@ interface MiniCasesState {
   loading: boolean;
   error: string | null;
   initDataMissing: boolean;
+}
+
+interface PaymentState {
+  caseId: string;
+  caseTitle: string;
+  status: 'loading' | 'paid' | 'cancelled' | 'failed' | 'error';
+  message: string;
 }
 
 const useTelegramTheme = (): [ResolvedTelegramTheme, () => void] => {
@@ -187,7 +200,9 @@ const renderCasesContent = (
   cases: MiniCase[],
   loading: boolean,
   error: string | null,
-  initDataMissing: boolean
+  initDataMissing: boolean,
+  onBuy: (miniCase: MiniCase) => void,
+  purchasingCaseId: string | null
 ): ReactNode => {
   if (initDataMissing) {
     return (
@@ -215,31 +230,47 @@ const renderCasesContent = (
 
   return (
     <div className="cases-grid">
-      {cases.map((miniCase) => (
-        <article key={miniCase.id} className="case-card">
-          <div className="case-thumbnail">
-            <img
-              src={miniCase.thumbnail}
-              alt={`Обложка кейса «${miniCase.title}»`}
-              loading="lazy"
-              decoding="async"
-            />
-          </div>
-          <div className="case-body">
-            <h3 className="case-title">{miniCase.title}</h3>
-            <p className="case-description">{miniCase.shortDescription}</p>
-          </div>
-          <div className="case-footer">
-            <span className="case-price" aria-label={`Стоимость ${miniCase.priceStars} звёзд`}>
-              <span className="case-price-value">{miniCase.priceStars}</span>
-              <span className="case-price-unit" aria-hidden="true">
-                ★
-              </span>
-            </span>
-            <span className="case-price-hint">звёзд</span>
-          </div>
-        </article>
-      ))}
+      {cases.map((miniCase) => {
+        const isProcessing = purchasingCaseId === miniCase.id;
+        return (
+          <article key={miniCase.id} className="case-card">
+            <div className="case-thumbnail">
+              <img
+                src={miniCase.thumbnail}
+                alt={`Обложка кейса «${miniCase.title}»`}
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
+            <div className="case-body">
+              <h3 className="case-title">{miniCase.title}</h3>
+              <p className="case-description">{miniCase.shortDescription}</p>
+            </div>
+            <div className="case-footer">
+              <div className="case-price-group">
+                <span
+                  className="case-price"
+                  aria-label={`Стоимость ${miniCase.priceStars} звёзд`}
+                >
+                  <span className="case-price-value">{miniCase.priceStars}</span>
+                  <span className="case-price-unit" aria-hidden="true">
+                    ★
+                  </span>
+                </span>
+                <span className="case-price-hint">звёзд</span>
+              </div>
+              <button
+                type="button"
+                className="case-buy-button"
+                onClick={() => onBuy(miniCase)}
+                disabled={isProcessing}
+              >
+                {isProcessing ? 'Открываем…' : 'Купить'}
+              </button>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 };
@@ -247,8 +278,8 @@ const renderCasesContent = (
 const App = () => {
   const [theme, refreshTheme] = useTelegramTheme();
   const { cases, loading, error, initDataMissing } = useMiniCases();
-const App = () => {
-  const [theme, refreshTheme] = useTelegramTheme();
+  const [paymentState, setPaymentState] = useState<PaymentState | null>(null);
+  const [processingCaseId, setProcessingCaseId] = useState<string | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -269,9 +300,126 @@ const App = () => {
     [theme.backgroundColor, theme.secondaryBackgroundColor]
   );
 
+  const handlePurchase = useCallback(async (miniCase: MiniCase) => {
+    const webApp = initializeTelegramWebApp();
+    const initData = webApp?.initData ?? '';
+
+    if (!initData) {
+      setPaymentState({
+        caseId: miniCase.id,
+        caseTitle: miniCase.title,
+        status: 'error',
+        message: 'initData недоступен. Откройте Mini App из Telegram и попробуйте снова.'
+      });
+      return;
+    }
+
+    setProcessingCaseId(miniCase.id);
+    setPaymentState({
+      caseId: miniCase.id,
+      caseTitle: miniCase.title,
+      status: 'loading',
+      message: `Открываем платёж для кейса «${miniCase.title}»…`
+    });
+
+    try {
+      const response = await fetch(
+        `/api/miniapp/invoice?initData=${encodeURIComponent(initData)}`,
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ caseId: miniCase.id })
+        }
+      );
+
+      if (!response.ok) {
+        const fallback = await response.text().catch(() => '');
+        let details = fallback;
+        if (fallback) {
+          try {
+            const parsed: unknown = JSON.parse(fallback);
+            if (isRecord(parsed) && typeof parsed.error === 'string') {
+              details = parsed.error;
+            }
+          } catch {
+            // ignore json parse failure
+          }
+        }
+        throw new Error(
+          details || `Не удалось создать счёт (код ${response.status})`
+        );
+      }
+
+      const payload: unknown = await response.json();
+      const invoiceLink =
+        isRecord(payload) && typeof payload.invoiceLink === 'string'
+          ? payload.invoiceLink.trim()
+          : '';
+
+      if (!invoiceLink) {
+        throw new Error('Сервер не вернул ссылку на оплату.');
+      }
+
+      const invoiceStatus = await openInvoice(invoiceLink);
+      switch (invoiceStatus) {
+        case 'paid':
+          setPaymentState({
+            caseId: miniCase.id,
+            caseTitle: miniCase.title,
+            status: 'paid',
+            message:
+              `Платёж за кейс «${miniCase.title}» принят в Telegram. Ждите подтверждение после обработки вебхука.`
+          });
+          break;
+        case 'cancelled':
+          setPaymentState({
+            caseId: miniCase.id,
+            caseTitle: miniCase.title,
+            status: 'cancelled',
+            message: `Вы отменили оплату кейса «${miniCase.title}».`
+          });
+          break;
+        case 'failed':
+        default:
+          setPaymentState({
+            caseId: miniCase.id,
+            caseTitle: miniCase.title,
+            status: 'failed',
+            message:
+              `Telegram сообщил о сбое при оплате кейса «${miniCase.title}». Попробуйте ещё раз позже.`
+          });
+          break;
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Не удалось обработать покупку.';
+      setPaymentState({
+        caseId: miniCase.id,
+        caseTitle: miniCase.title,
+        status: 'error',
+        message: `Не удалось завершить покупку кейса «${miniCase.title}»: ${message}`
+      });
+    } finally {
+      setProcessingCaseId(null);
+    }
+  }, []);
+
   const casesContent = useMemo(
-    () => renderCasesContent(cases, loading, error, initDataMissing),
-    [cases, loading, error, initDataMissing]
+    () =>
+      renderCasesContent(
+        cases,
+        loading,
+        error,
+        initDataMissing,
+        handlePurchase,
+        processingCaseId
+      ),
+    [cases, loading, error, initDataMissing, handlePurchase, processingCaseId]
   );
 
   return (
@@ -300,6 +448,17 @@ const App = () => {
             <h2>Актуальные кейсы</h2>
             <p>Всегда свежие подборки с учётом параметров Stars и призовой экономики.</p>
           </div>
+
+          {paymentState ? (
+            <div
+              className={`payment-status payment-status--${paymentState.status}`}
+              role="status"
+              aria-live="polite"
+            >
+              {paymentState.message}
+            </div>
+          ) : null}
+
           <div className="cases-content" aria-live="polite">
             {casesContent}
           </div>

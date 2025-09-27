@@ -2,6 +2,9 @@ package com.example.app
 
 import com.example.app.economy.installEconomyIntegration
 import com.example.app.logging.applicationLogger
+import com.example.app.payments.TelegramInvoiceService
+import com.example.app.payments.loadPaymentsConfig
+import com.example.app.payments.registerMiniAppInvoiceRoutes
 import com.example.app.plugins.installCallIdPlugin
 import com.example.app.plugins.installDefaultSecurityHeaders
 import com.example.app.plugins.installJsonSerialization
@@ -12,6 +15,8 @@ import com.example.app.rng.installRngIntegration
 import com.example.app.routes.infrastructureRoutes
 import com.example.app.telegram.installTelegramIntegration
 import com.example.app.util.configValue
+import com.example.giftsbot.economy.CasesRepository
+import com.example.giftsbot.telegram.TelegramApiClient
 import com.typesafe.config.ConfigFactory
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -72,6 +77,22 @@ fun Application.module() {
         )
     }
 
+    val paymentsConfig = loadPaymentsConfig()
+    val botToken =
+        configValue(
+            propertyKeys = listOf("bot.token", "telegram.bot.token"),
+            envKeys = listOf("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
+            configKeys = listOf("app.telegram.botToken", "telegram.botToken"),
+        )?.takeUnless { it.isBlank() }
+            ?: error("BOT_TOKEN is not configured.")
+
+    val invoiceService =
+        TelegramInvoiceService(
+            casesRepository = CasesRepository(meterRegistry = prometheusRegistry).also { it.reload() },
+            telegramApiClient = TelegramApiClient(botToken = botToken),
+            paymentsConfig = paymentsConfig,
+        )
+
     installEconomyIntegration(meterRegistry = prometheusRegistry)
     installRngIntegration(meterRegistry = prometheusRegistry)
     installTelegramIntegration(meterRegistry = prometheusRegistry)
@@ -79,5 +100,6 @@ fun Application.module() {
     routing {
         infrastructureRoutes(healthPath, metricsPath, prometheusRegistry)
         registerMiniAppRoutes(miniAppRoot, miniAppIndex)
+        registerMiniAppInvoiceRoutes(botToken, invoiceService)
     }
 }
