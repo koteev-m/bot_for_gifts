@@ -27,7 +27,7 @@ class UpdateDispatcherTest {
                 UpdateDispatcher(
                     scope = this,
                     meterRegistry = meterRegistry,
-                    queueCapacity = 4,
+                    settings = UpdateDispatcherSettings(queueCapacity = 4),
                 )
 
             try {
@@ -55,7 +55,7 @@ class UpdateDispatcherTest {
                 UpdateDispatcher(
                     scope = this,
                     meterRegistry = meterRegistry,
-                    queueCapacity = 4,
+                    settings = UpdateDispatcherSettings(queueCapacity = 4),
                 )
 
             try {
@@ -85,7 +85,7 @@ class UpdateDispatcherTest {
                 UpdateDispatcher(
                     scope = this,
                     meterRegistry = meterRegistry,
-                    queueCapacity = 2,
+                    settings = UpdateDispatcherSettings(queueCapacity = 2),
                 )
 
             try {
@@ -116,8 +116,7 @@ class UpdateDispatcherTest {
                 UpdateDispatcher(
                     scope = scope,
                     meterRegistry = meterRegistry,
-                    queueCapacity = 4,
-                    workers = 2,
+                    settings = UpdateDispatcherSettings(queueCapacity = 4, workers = 2),
                 )
 
             val dropBeforeStart = meterRegistry.queueCounter(MetricsNames.UPDATES_DROPPED_TOTAL)

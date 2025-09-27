@@ -1,15 +1,6 @@
 package com.example.app.telegram
 
-import com.example.app.payments.AwardService
-import com.example.app.payments.GiftCatalogCache
-import com.example.app.payments.PaymentSupport
-import com.example.app.payments.PreCheckoutHandler
 import com.example.app.payments.RefundService
-import com.example.app.payments.SuccessfulPaymentHandler
-import com.example.app.payments.TelegramAwardService
-import com.example.app.payments.loadPaymentsConfig
-import com.example.app.rng.getRngService
-import com.example.app.util.configValue
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.telegram.LongPollingRunner
 import com.example.giftsbot.telegram.TelegramApiClient
@@ -20,38 +11,35 @@ import io.ktor.server.application.log
 import io.ktor.server.routing.routing
 import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 
-private const val TELEGRAM_QUEUE_CAPACITY = 10_000
-private const val TELEGRAM_WORKER_COUNT = 1
+private val TELEGRAM_DISPATCHER_SETTINGS =
+    UpdateDispatcherSettings(queueCapacity = 10_000, workers = 1)
 
 fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
     val config = loadTelegramIntegrationConfig()
     val telegramScope = createTelegramScope()
     val api = TelegramApiClient(botToken = config.botToken)
     val casesRepository = CasesRepository(meterRegistry = meterRegistry).also { it.reload() }
-    val paymentsConfig = loadPaymentsConfig()
-    val preCheckoutHandler = PreCheckoutHandler(api, casesRepository, meterRegistry)
+    val preCheckoutHandler = createPreCheckoutHandler(api, casesRepository, meterRegistry)
     val refundService = RefundService(api, meterRegistry)
     val successfulPaymentHandler =
-        SuccessfulPaymentHandler(
-            telegramApiClient = api,
-            rngService = getRngService(),
+        createSuccessfulPaymentHandler(
+            api = api,
             casesRepository = casesRepository,
-            awardService = createAwardService(api, casesRepository, refundService, meterRegistry),
-            paymentSupport = PaymentSupport(config = paymentsConfig, refundService = refundService),
+            refundService = refundService,
             meterRegistry = meterRegistry,
         )
     val router = WebhookUpdateRouter(preCheckoutHandler, successfulPaymentHandler)
-    val dispatcher = createDispatcher(telegramScope, meterRegistry, router)
+    val dispatcher = createDispatcher(telegramScope, meterRegistry, router, TELEGRAM_DISPATCHER_SETTINGS)
 
-    dispatcher.start(TELEGRAM_WORKER_COUNT)
-    log.info("Telegram update dispatcher started with {} worker(s)", TELEGRAM_WORKER_COUNT)
+    dispatcher.start()
+    log.info(
+        "Telegram update dispatcher started with {} worker(s)",
+        TELEGRAM_DISPATCHER_SETTINGS.workers,
+    )
 
     registerWebhookRoute(
         webhookPath = config.webhookPath,
@@ -85,102 +73,6 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
         longPollingRunner = longPollingRunner,
     )
 }
-
-private fun createAwardService(
-    api: TelegramApiClient,
-    casesRepository: CasesRepository,
-    refundService: RefundService,
-    meterRegistry: MeterRegistry,
-): AwardService {
-    val giftCatalogCache = GiftCatalogCache(api)
-    return TelegramAwardService(
-        telegramApiClient = api,
-        casesRepository = casesRepository,
-        giftCatalogCache = giftCatalogCache,
-        refundService = refundService,
-        meterRegistry = meterRegistry,
-    )
-}
-
-private fun Application.loadTelegramIntegrationConfig(): TelegramIntegrationConfig {
-    val botToken =
-        configValue(
-            propertyKeys = listOf("bot.token", "telegram.bot.token"),
-            envKeys = listOf("BOT_TOKEN", "TELEGRAM_BOT_TOKEN"),
-            configKeys = listOf("app.telegram.botToken", "telegram.botToken"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("BOT_TOKEN is not configured.")
-
-    val mode =
-        parseMode(
-            configValue(
-                propertyKeys = listOf("bot.mode", "telegram.bot.mode"),
-                envKeys = listOf("BOT_MODE", "TELEGRAM_BOT_MODE"),
-                configKeys = listOf("app.telegram.mode", "telegram.mode"),
-            ),
-        )
-
-    val webhookPath =
-        configValue(
-            propertyKeys = listOf("telegram.webhookPath"),
-            envKeys = listOf("WEBHOOK_PATH"),
-            configKeys = listOf("app.telegram.webhookPath"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("WEBHOOK_PATH is not configured.")
-
-    val webhookSecretToken =
-        configValue(
-            propertyKeys = listOf("telegram.webhookSecretToken"),
-            envKeys = listOf("WEBHOOK_SECRET_TOKEN"),
-            configKeys = listOf("app.telegram.webhookSecretToken"),
-        )?.takeUnless { it.isBlank() }
-            ?: error("WEBHOOK_SECRET_TOKEN is not configured.")
-
-    val adminToken =
-        configValue(
-            propertyKeys = listOf("admin.token"),
-            envKeys = listOf("ADMIN_TOKEN"),
-            configKeys = listOf("app.admin.token"),
-        )?.takeUnless { it.isBlank() }
-
-    val publicBaseUrl =
-        configValue(
-            propertyKeys = listOf("telegram.publicBaseUrl"),
-            envKeys = listOf("PUBLIC_BASE_URL"),
-            configKeys = listOf("app.telegram.publicBaseUrl"),
-        )?.takeUnless { it.isBlank() }
-
-    return TelegramIntegrationConfig(
-        botToken = botToken,
-        mode = mode,
-        webhookPath = webhookPath,
-        webhookSecretToken = webhookSecretToken,
-        adminToken = adminToken,
-        publicBaseUrl = publicBaseUrl,
-    )
-}
-
-private fun parseMode(rawMode: String?): TelegramMode {
-    val normalized = rawMode?.trim()?.lowercase()
-    return when (normalized) {
-        null, "", "webhook" -> TelegramMode.WEBHOOK
-        "long_polling", "long-polling" -> TelegramMode.LONG_POLLING
-        else -> error("Unsupported BOT_MODE value: $rawMode")
-    }
-}
-
-private fun createDispatcher(
-    scope: CoroutineScope,
-    meterRegistry: MeterRegistry,
-    router: WebhookUpdateRouter,
-): UpdateDispatcher =
-    UpdateDispatcher(
-        scope = scope,
-        meterRegistry = meterRegistry,
-        queueCapacity = TELEGRAM_QUEUE_CAPACITY,
-        workers = TELEGRAM_WORKER_COUNT,
-        handleUpdate = router::route,
-    )
 
 private fun Application.registerWebhookRoute(
     webhookPath: String,
@@ -289,30 +181,7 @@ private fun Application.setupLifecycleHooks(
     }
 }
 
-private fun TelegramMode.logValue(): String =
-    when (this) {
-        TelegramMode.WEBHOOK -> "webhook"
-        TelegramMode.LONG_POLLING -> "long_polling"
-    }
-
-private fun createTelegramScope(): CoroutineScope =
-    CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("telegram"))
-
-private data class TelegramIntegrationConfig(
-    val botToken: String,
-    val mode: TelegramMode,
-    val webhookPath: String,
-    val webhookSecretToken: String,
-    val adminToken: String?,
-    val publicBaseUrl: String?,
-)
-
 private data class TelegramLifecycleInfo(
     val mode: TelegramMode,
     val webhookPath: String,
 )
-
-private enum class TelegramMode {
-    WEBHOOK,
-    LONG_POLLING,
-}

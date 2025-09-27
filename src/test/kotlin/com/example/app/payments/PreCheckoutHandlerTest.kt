@@ -3,13 +3,13 @@ package com.example.app.payments
 import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
-import com.example.app.payments.dto.PaymentPayload
 import com.example.app.payments.STARS_CURRENCY_CODE
+import com.example.app.payments.dto.PaymentPayload
 import com.example.giftsbot.economy.CaseConfig
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.telegram.PreCheckoutQueryDto
-import com.example.giftsbot.telegram.UserDto
 import com.example.giftsbot.telegram.TelegramApiClient
+import com.example.giftsbot.telegram.UserDto
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import io.mockk.coEvery
 import io.mockk.coVerify

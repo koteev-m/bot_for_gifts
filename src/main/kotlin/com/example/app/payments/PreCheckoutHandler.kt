@@ -4,7 +4,6 @@ import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
 import com.example.app.payments.dto.PaymentPayload
-import com.example.app.payments.STARS_CURRENCY_CODE
 import com.example.giftsbot.economy.CaseConfig
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.telegram.PreCheckoutQueryDto
@@ -20,13 +19,15 @@ class PreCheckoutHandler(
 ) {
     private val metrics = PreCheckoutMetrics(meterRegistry)
 
-    suspend fun handle(updateId: Long, query: PreCheckoutQueryDto) =
-        withTimeout(RESPONSE_TIMEOUT_MILLIS) {
-            when (val validation = validate(query)) {
-                is ValidationResult.Success -> respondSuccess(updateId, query, validation)
-                is ValidationResult.Failure -> respondFailure(updateId, query, validation)
-            }
+    suspend fun handle(
+        updateId: Long,
+        query: PreCheckoutQueryDto,
+    ) = withTimeout(RESPONSE_TIMEOUT_MILLIS) {
+        when (val validation = validate(query)) {
+            is ValidationResult.Success -> respondSuccess(updateId, query, validation)
+            is ValidationResult.Failure -> respondFailure(updateId, query, validation)
         }
+    }
 
     private suspend fun respondSuccess(
         updateId: Long,
@@ -82,57 +83,75 @@ class PreCheckoutHandler(
     }
 
     private fun validate(query: PreCheckoutQueryDto): ValidationResult {
-        val payloadResult = runCatching { PaymentPayload.decode(query.invoice_payload) }
-        val payload = payloadResult.getOrElse { cause ->
-            return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "invalid_payload",
-                cause = cause,
-            )
+        val payloadOutcome = decodePayload(query)
+        return when (payloadOutcome) {
+            is PayloadOutcome.Invalid -> payloadOutcome.failure
+            is PayloadOutcome.Valid -> validatePayload(query, payloadOutcome.payload)
         }
-
-        if (payload.userId != query.from.id) {
-            return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "user_mismatch expected=${payload.userId} actual=${query.from.id}",
-            )
-        }
-        if (payload.nonce.isBlank()) {
-            return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "nonce_blank",
-            )
-        }
-        if (payload.caseId.isBlank()) {
-            return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "case_id_blank",
-            )
-        }
-
-        val case = casesRepository.get(payload.caseId)
-            ?: return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "case_not_found caseId=${payload.caseId}",
-            )
-
-        if (query.currency != STARS_CURRENCY_CODE) {
-            return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "invalid_currency expected=$STARS_CURRENCY_CODE actual=${query.currency}",
-            )
-        }
-        if (query.total_amount != case.priceStars) {
-            return ValidationResult.Failure(
-                userMessage = DEFAULT_ERROR_MESSAGE,
-                reason = "invalid_amount expected=${case.priceStars} actual=${query.total_amount}",
-            )
-        }
-
-        return ValidationResult.Success(payload = payload, caseConfig = case)
     }
 
-    private class PreCheckoutMetrics(registry: MeterRegistry) {
+    private fun validatePayload(
+        query: PreCheckoutQueryDto,
+        payload: PaymentPayload,
+    ): ValidationResult {
+        val failure = validateConsistency(query, payload)
+        return failure ?: resolveCase(query, payload)
+    }
+
+    private fun decodePayload(query: PreCheckoutQueryDto): PayloadOutcome {
+        val result = runCatching { PaymentPayload.decode(query.invoice_payload) }
+        val payload = result.getOrNull()
+        if (payload != null) {
+            return PayloadOutcome.Valid(payload)
+        }
+        val failure =
+            ValidationResult.Failure(
+                userMessage = DEFAULT_ERROR_MESSAGE,
+                reason = "invalid_payload",
+                cause = result.exceptionOrNull(),
+            )
+        return PayloadOutcome.Invalid(failure)
+    }
+
+    private fun validateConsistency(
+        query: PreCheckoutQueryDto,
+        payload: PaymentPayload,
+    ): ValidationResult.Failure? {
+        val reason =
+            when {
+                payload.userId != query.from.id ->
+                    "user_mismatch expected=${payload.userId} actual=${query.from.id}"
+                payload.nonce.isBlank() -> "nonce_blank"
+                payload.caseId.isBlank() -> "case_id_blank"
+                else -> null
+            } ?: return null
+        return ValidationResult.Failure(userMessage = DEFAULT_ERROR_MESSAGE, reason = reason)
+    }
+
+    private fun resolveCase(
+        query: PreCheckoutQueryDto,
+        payload: PaymentPayload,
+    ): ValidationResult {
+        val case = casesRepository.get(payload.caseId)
+        val failureReason =
+            when {
+                case == null -> "case_not_found caseId=${payload.caseId}"
+                query.currency != STARS_CURRENCY_CODE ->
+                    "invalid_currency expected=$STARS_CURRENCY_CODE actual=${query.currency}"
+                query.total_amount != case.priceStars ->
+                    "invalid_amount expected=${case.priceStars} actual=${query.total_amount}"
+                else -> null
+            }
+        return if (failureReason == null) {
+            ValidationResult.Success(payload = payload, caseConfig = case!!)
+        } else {
+            ValidationResult.Failure(userMessage = DEFAULT_ERROR_MESSAGE, reason = failureReason)
+        }
+    }
+
+    private class PreCheckoutMetrics(
+        registry: MeterRegistry,
+    ) {
         private val componentTag = MetricsTags.COMPONENT to COMPONENT_VALUE
         private val successCounter =
             Metrics.counter(registry, MetricsNames.PRE_CHECKOUT_TOTAL, componentTag, MetricsTags.RESULT to RESULT_OK)
@@ -149,13 +168,26 @@ class PreCheckoutHandler(
     }
 
     private sealed interface ValidationResult {
-        data class Success(val payload: PaymentPayload, val caseConfig: CaseConfig) : ValidationResult
+        data class Success(
+            val payload: PaymentPayload,
+            val caseConfig: CaseConfig,
+        ) : ValidationResult
 
         data class Failure(
             val userMessage: String,
             val reason: String,
             val cause: Throwable? = null,
         ) : ValidationResult
+    }
+
+    private sealed interface PayloadOutcome {
+        data class Valid(
+            val payload: PaymentPayload,
+        ) : PayloadOutcome
+
+        data class Invalid(
+            val failure: ValidationResult.Failure,
+        ) : PayloadOutcome
     }
 
     companion object {
