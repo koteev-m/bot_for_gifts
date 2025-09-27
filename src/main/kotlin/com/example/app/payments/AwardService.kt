@@ -3,6 +3,8 @@ package com.example.app.payments
 import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
+import com.example.app.payments.RefundReason
+import com.example.app.payments.RefundService
 import com.example.giftsbot.economy.CaseSlotType
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.economy.PrizeItemConfig
@@ -21,6 +23,7 @@ internal class TelegramAwardService(
     private val telegramApiClient: TelegramApiClient,
     private val casesRepository: CasesRepository,
     private val giftCatalogCache: GiftCatalogCache,
+    private val refundService: RefundService,
     meterRegistry: MeterRegistry,
 ) : AwardService {
     private val logger = LoggerFactory.getLogger(TelegramAwardService::class.java)
@@ -60,6 +63,7 @@ internal class TelegramAwardService(
         } catch (cause: Throwable) {
             journal.remove(chargeId, AwardJournalEntry.InProgress)
             failCounter.increment()
+            refundIfPossible(plan, cause)
             logger.error(
                 "award delivery failed: chargeId={} userId={} caseId={} prizeId={} reason={}",
                 chargeId,
@@ -183,6 +187,38 @@ internal class TelegramAwardService(
             plan.caseId,
             stateDescription,
         )
+    }
+
+    private fun refundIfPossible(
+        plan: AwardPlan,
+        cause: Throwable,
+    ) {
+        if (!plan.currency.equals(STARS_CURRENCY_CODE, ignoreCase = true)) {
+            logger.warn(
+                "award refund skipped: chargeId={} userId={} currency={} reason={}",
+                plan.telegramPaymentChargeId,
+                plan.userId,
+                plan.currency,
+                cause.javaClass.simpleName,
+            )
+            return
+        }
+        val detail = cause.message?.takeIf { it.isNotBlank() } ?: cause.javaClass.simpleName
+        runCatching {
+            refundService.refundStarPayment(
+                userId = plan.userId,
+                telegramPaymentChargeId = plan.telegramPaymentChargeId,
+                reason = RefundReason.Award(detail),
+            )
+        }.onFailure { refundError ->
+            logger.error(
+                "award refund failed: chargeId={} userId={} detail={}",
+                plan.telegramPaymentChargeId,
+                plan.userId,
+                detail,
+                refundError,
+            )
+        }
     }
 
     companion object {

@@ -49,6 +49,9 @@ object MetricsNames {
     const val AWARD_PREMIUM_TOTAL = "award_premium_total"
     const val AWARD_INTERNAL_TOTAL = "award_internal_total"
     const val AWARD_FAIL_TOTAL = "award_fail_total"
+
+    const val REFUND_TOTAL = "refund_total"
+    const val REFUND_FAIL_TOTAL = "refund_fail_total"
 }
 
 object MetricsTags {

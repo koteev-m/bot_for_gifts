@@ -2,7 +2,9 @@ package com.example.app.telegram
 
 import com.example.app.payments.AwardService
 import com.example.app.payments.GiftCatalogCache
+import com.example.app.payments.PaymentSupport
 import com.example.app.payments.PreCheckoutHandler
+import com.example.app.payments.RefundService
 import com.example.app.payments.SuccessfulPaymentHandler
 import com.example.app.payments.TelegramAwardService
 import com.example.app.payments.loadPaymentsConfig
@@ -35,13 +37,14 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
     val casesRepository = CasesRepository(meterRegistry = meterRegistry).also { it.reload() }
     val paymentsConfig = loadPaymentsConfig()
     val preCheckoutHandler = PreCheckoutHandler(api, casesRepository, meterRegistry)
+    val refundService = RefundService(api, meterRegistry)
     val successfulPaymentHandler =
         SuccessfulPaymentHandler(
             telegramApiClient = api,
             rngService = getRngService(),
             casesRepository = casesRepository,
-            awardService = createAwardService(api, casesRepository, meterRegistry),
-            paymentsConfig = paymentsConfig,
+            awardService = createAwardService(api, casesRepository, refundService, meterRegistry),
+            paymentSupport = PaymentSupport(config = paymentsConfig, refundService = refundService),
             meterRegistry = meterRegistry,
         )
     val router = WebhookUpdateRouter(preCheckoutHandler, successfulPaymentHandler)
@@ -86,6 +89,7 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
 private fun createAwardService(
     api: TelegramApiClient,
     casesRepository: CasesRepository,
+    refundService: RefundService,
     meterRegistry: MeterRegistry,
 ): AwardService {
     val giftCatalogCache = GiftCatalogCache(api)
@@ -93,6 +97,7 @@ private fun createAwardService(
         telegramApiClient = api,
         casesRepository = casesRepository,
         giftCatalogCache = giftCatalogCache,
+        refundService = refundService,
         meterRegistry = meterRegistry,
     )
 }

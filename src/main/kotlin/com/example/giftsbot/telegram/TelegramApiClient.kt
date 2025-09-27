@@ -225,6 +225,30 @@ class TelegramApiClient(
         }
     }
 
+    suspend fun refundStarPayment(
+        userId: Long,
+        telegramPaymentChargeId: String,
+    ) {
+        val normalizedChargeId = telegramPaymentChargeId.trim()
+        logger.debug(
+            "refundStarPayment request userId={} chargeId={}",
+            userId,
+            normalizedChargeId,
+        )
+        val result =
+            execute<Boolean>(
+                methodName = "refundStarPayment",
+                body =
+                    RefundStarPaymentRequest(
+                        userId = userId,
+                        telegramPaymentChargeId = normalizedChargeId,
+                    ),
+            )
+        if (!result) {
+            throw TelegramApiException("Telegram API refundStarPayment returned false result")
+        }
+    }
+
     suspend fun giftPremiumSubscription(
         userId: Long,
         monthCount: Int,
@@ -453,6 +477,14 @@ private data class SendGiftRequest(
     val giftId: String,
     @SerialName("pay_for_upgrade")
     val payForUpgrade: Boolean? = null,
+)
+
+@Serializable
+private data class RefundStarPaymentRequest(
+    @SerialName("user_id")
+    val userId: Long,
+    @SerialName("telegram_payment_charge_id")
+    val telegramPaymentChargeId: String,
 )
 
 @Serializable
