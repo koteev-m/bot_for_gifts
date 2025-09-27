@@ -40,6 +40,10 @@ object MetricsNames {
     const val ADMIN_FAIL_TOTAL = "tg_admin_webhook_fail_total"
 
     const val PRE_CHECKOUT_TOTAL = "tg_pre_checkout_total"
+
+    const val PAY_SUCCESS_TOTAL = "pay_success_total"
+    const val PAY_SUCCESS_IDEMPOTENT_TOTAL = "pay_success_idempotent_total"
+    const val PAY_SUCCESS_FAIL_TOTAL = "pay_success_fail_total"
 }
 
 object MetricsTags {

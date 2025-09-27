@@ -1,10 +1,15 @@
 package com.example.app.telegram
 
+import com.example.app.payments.AwardPlan
+import com.example.app.payments.AwardService
 import com.example.app.payments.PreCheckoutHandler
+import com.example.app.payments.SuccessfulPaymentHandler
+import com.example.app.payments.loadPaymentsConfig
+import com.example.app.rng.getRngService
 import com.example.app.util.configValue
+import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.telegram.LongPollingRunner
 import com.example.giftsbot.telegram.TelegramApiClient
-import com.example.giftsbot.economy.CasesRepository
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStarted
 import io.ktor.server.application.ApplicationStopping
@@ -27,8 +32,18 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
     val telegramScope = createTelegramScope()
     val api = TelegramApiClient(botToken = config.botToken)
     val casesRepository = CasesRepository(meterRegistry = meterRegistry).also { it.reload() }
+    val paymentsConfig = loadPaymentsConfig()
     val preCheckoutHandler = PreCheckoutHandler(api, casesRepository, meterRegistry)
-    val router = WebhookUpdateRouter(preCheckoutHandler)
+    val successfulPaymentHandler =
+        SuccessfulPaymentHandler(
+            telegramApiClient = api,
+            rngService = getRngService(),
+            casesRepository = casesRepository,
+            awardService = createAwardService(),
+            paymentsConfig = paymentsConfig,
+            meterRegistry = meterRegistry,
+        )
+    val router = WebhookUpdateRouter(preCheckoutHandler, successfulPaymentHandler)
     val dispatcher = createDispatcher(telegramScope, meterRegistry, router)
 
     dispatcher.start(TELEGRAM_WORKER_COUNT)
@@ -66,6 +81,14 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
         longPollingRunner = longPollingRunner,
     )
 }
+
+private fun createAwardService(): AwardService =
+    object : AwardService {
+        @Suppress("UNUSED_PARAMETER")
+        override suspend fun schedule(plan: AwardPlan) {
+            // Award pipeline will be implemented in the next step.
+        }
+    }
 
 private fun Application.loadTelegramIntegrationConfig(): TelegramIntegrationConfig {
     val botToken =
