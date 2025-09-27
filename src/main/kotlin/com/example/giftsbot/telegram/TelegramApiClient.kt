@@ -45,6 +45,7 @@ private const val MAX_RETRY_DELAY_MS = 1_600L
 private const val MAX_ERROR_BODY_PREVIEW = 512
 private const val NANOS_IN_MILLISECOND = 1_000_000L
 
+@Suppress("TooManyFunctions")
 class TelegramApiClient(
     private val botToken: String,
     private val http: HttpClient =
@@ -122,6 +123,22 @@ class TelegramApiClient(
             webhookInfo.has_custom_certificate,
         )
         return webhookInfo
+    }
+
+    suspend fun createInvoiceLink(request: CreateInvoiceLinkRequest): String {
+        val priceAmount = request.prices.singleOrNull()?.amount ?: request.prices.sumOf { it.amount }
+        logger.debug(
+            "createInvoiceLink request title={} currency={} priceAmount={} pricesCount={} " +
+                "hasBusinessConnectionId={} receiptEnabled={} payloadSize={}",
+            request.title,
+            request.currency,
+            priceAmount,
+            request.prices.size,
+            request.businessConnectionId != null,
+            request.receiptEnabled == true,
+            request.payload.length,
+        )
+        return execute(methodName = "createInvoiceLink", body = request)
     }
 
     suspend fun getUpdates(
@@ -296,6 +313,27 @@ private data class GetUpdatesRequest(
     val timeout: Int,
     @SerialName("allowed_updates")
     val allowedUpdates: List<String>? = null,
+)
+
+@Serializable
+data class CreateInvoiceLinkRequest(
+    val title: String,
+    val description: String,
+    val payload: String,
+    val currency: String,
+    val prices: List<LabeledPrice>,
+    @SerialName("provider_token")
+    val providerToken: String? = null,
+    @SerialName("business_connection_id")
+    val businessConnectionId: String? = null,
+    @SerialName("receipt_enabled")
+    val receiptEnabled: Boolean? = null,
+)
+
+@Serializable
+data class LabeledPrice(
+    val label: String,
+    val amount: Long,
 )
 
 private fun shouldRetry(
