@@ -2,6 +2,7 @@
 
 package com.example.giftsbot.telegram
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -100,4 +101,22 @@ data class WebhookInfoDto(
     val last_synchronization_error_date: Int? = null,
     val max_connections: Int? = null,
     val allowed_updates: List<String>? = null,
+)
+
+@Serializable
+data class AvailableGiftsDto(
+    val gifts: List<GiftDto>,
+)
+
+@Serializable
+data class GiftDto(
+    val id: String,
+    @SerialName("star_count")
+    val starCount: Long,
+    @SerialName("upgrade_star_count")
+    val upgradeStarCount: Long? = null,
+    @SerialName("remaining_count")
+    val remainingCount: Long? = null,
+    @SerialName("total_count")
+    val totalCount: Long? = null,
 )

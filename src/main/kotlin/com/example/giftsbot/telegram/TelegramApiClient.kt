@@ -194,6 +194,63 @@ class TelegramApiClient(
         )
     }
 
+    suspend fun getAvailableGifts(): AvailableGiftsDto {
+        logger.debug("getAvailableGifts request")
+        return execute(methodName = "getAvailableGifts")
+    }
+
+    suspend fun sendGift(
+        userId: Long,
+        giftId: String,
+        payForUpgrade: Boolean = false,
+    ) {
+        logger.debug(
+            "sendGift request userId={} giftId={} payForUpgrade={}",
+            userId,
+            giftId,
+            payForUpgrade,
+        )
+        val result =
+            execute<Boolean>(
+                methodName = "sendGift",
+                body =
+                    SendGiftRequest(
+                        userId = userId,
+                        giftId = giftId,
+                        payForUpgrade = payForUpgrade.takeIf { it },
+                    ),
+            )
+        if (!result) {
+            throw TelegramApiException("Telegram API sendGift returned false result")
+        }
+    }
+
+    suspend fun giftPremiumSubscription(
+        userId: Long,
+        monthCount: Int,
+        starCount: Long,
+    ) {
+        logger.debug(
+            "giftPremiumSubscription request userId={} monthCount={} starCount={}",
+            userId,
+            monthCount,
+            starCount,
+        )
+        val result =
+            execute<Boolean>(
+                methodName = "giftPremiumSubscription",
+                body =
+                    GiftPremiumSubscriptionRequest(
+                        userId = userId,
+                        starCount = starCount,
+                        monthCount = monthCount,
+                    ),
+            )
+        if (!result) {
+            throw TelegramApiException("Telegram API giftPremiumSubscription returned false result")
+        }
+    }
+
     suspend fun getUpdates(
         offset: Long?,
         timeoutSeconds: Int,
@@ -386,6 +443,26 @@ private data class GetUpdatesRequest(
     val timeout: Int,
     @SerialName("allowed_updates")
     val allowedUpdates: List<String>? = null,
+)
+
+@Serializable
+private data class SendGiftRequest(
+    @SerialName("user_id")
+    val userId: Long,
+    @SerialName("gift_id")
+    val giftId: String,
+    @SerialName("pay_for_upgrade")
+    val payForUpgrade: Boolean? = null,
+)
+
+@Serializable
+private data class GiftPremiumSubscriptionRequest(
+    @SerialName("user_id")
+    val userId: Long,
+    @SerialName("star_count")
+    val starCount: Long,
+    @SerialName("month_count")
+    val monthCount: Int,
 )
 
 @Serializable

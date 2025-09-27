@@ -44,6 +44,11 @@ object MetricsNames {
     const val PAY_SUCCESS_TOTAL = "pay_success_total"
     const val PAY_SUCCESS_IDEMPOTENT_TOTAL = "pay_success_idempotent_total"
     const val PAY_SUCCESS_FAIL_TOTAL = "pay_success_fail_total"
+
+    const val AWARD_GIFT_TOTAL = "award_gift_total"
+    const val AWARD_PREMIUM_TOTAL = "award_premium_total"
+    const val AWARD_INTERNAL_TOTAL = "award_internal_total"
+    const val AWARD_FAIL_TOTAL = "award_fail_total"
 }
 
 object MetricsTags {
