@@ -1,8 +1,10 @@
 package com.example.app.telegram
 
+import com.example.app.payments.PreCheckoutHandler
 import com.example.app.util.configValue
 import com.example.giftsbot.telegram.LongPollingRunner
 import com.example.giftsbot.telegram.TelegramApiClient
+import com.example.giftsbot.economy.CasesRepository
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStarted
 import io.ktor.server.application.ApplicationStopping
@@ -24,7 +26,10 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
     val config = loadTelegramIntegrationConfig()
     val telegramScope = createTelegramScope()
     val api = TelegramApiClient(botToken = config.botToken)
-    val dispatcher = createDispatcher(telegramScope, meterRegistry)
+    val casesRepository = CasesRepository(meterRegistry = meterRegistry).also { it.reload() }
+    val preCheckoutHandler = PreCheckoutHandler(api, casesRepository, meterRegistry)
+    val router = WebhookUpdateRouter(preCheckoutHandler)
+    val dispatcher = createDispatcher(telegramScope, meterRegistry, router)
 
     dispatcher.start(TELEGRAM_WORKER_COUNT)
     log.info("Telegram update dispatcher started with {} worker(s)", TELEGRAM_WORKER_COUNT)
@@ -132,12 +137,14 @@ private fun parseMode(rawMode: String?): TelegramMode {
 private fun createDispatcher(
     scope: CoroutineScope,
     meterRegistry: MeterRegistry,
+    router: WebhookUpdateRouter,
 ): UpdateDispatcher =
     UpdateDispatcher(
         scope = scope,
         meterRegistry = meterRegistry,
         queueCapacity = TELEGRAM_QUEUE_CAPACITY,
         workers = TELEGRAM_WORKER_COUNT,
+        handleUpdate = router::route,
     )
 
 private fun Application.registerWebhookRoute(
