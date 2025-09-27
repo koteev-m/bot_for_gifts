@@ -20,6 +20,10 @@ export interface TelegramWebApp {
   isExpanded: boolean;
   onEvent(eventType: 'themeChanged', eventHandler: () => void): void;
   offEvent(eventType: 'themeChanged', eventHandler: () => void): void;
+  openInvoice(
+    slug: string,
+    callback?: (status: 'paid' | 'cancelled' | 'failed') => void
+  ): boolean | Promise<boolean>;
 }
 
 declare global {
