@@ -12,11 +12,12 @@ class WebhookUpdateRouter(
         when (incoming) {
             is IncomingUpdate.SuccessfulPaymentUpdate -> handleSuccessfulPayment(incoming)
             is IncomingUpdate.PreCheckoutQueryUpdate -> handlePreCheckout(incoming)
-            else -> logger.debug(
-                "no handler for updateId={} type={}",
-                incoming.updateId,
-                incoming::class.simpleName,
-            )
+            else ->
+                logger.debug(
+                    "no handler for updateId={} type={}",
+                    incoming.updateId,
+                    incoming::class.simpleName,
+                )
         }
     }
 

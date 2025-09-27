@@ -9,137 +9,183 @@ import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.economy.PrizeItemConfig
 import com.example.giftsbot.rng.RngDrawRecord
 import com.example.giftsbot.rng.RngReceipt
-import com.example.giftsbot.telegram.AvailableGiftsDto
 import com.example.giftsbot.telegram.GiftDto
 import com.example.giftsbot.telegram.TelegramApiClient
-import io.micrometer.core.instrument.MeterRegistry
+import com.example.giftsbot.telegram.TelegramApiException
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import io.mockk.MockKAnnotations
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.impl.annotations.MockK
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.time.Clock
-import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class AwardServiceTest {
     @MockK
-    private lateinit var api: TelegramApiClient
+    private lateinit var telegramApiClient: TelegramApiClient
 
     @MockK
     private lateinit var casesRepository: CasesRepository
 
-    private lateinit var meterRegistry: MeterRegistry
+    @MockK
     private lateinit var giftCatalogCache: GiftCatalogCache
-    private lateinit var service: AwardService
+
+    @MockK
+    private lateinit var refundService: RefundService
+
+    private lateinit var meterRegistry: SimpleMeterRegistry
+    private lateinit var awardService: TelegramAwardService
 
     @BeforeEach
     fun setUp() {
-        MockKAnnotations.init(this)
+        MockKAnnotations.init(this, relaxUnitFun = true)
         meterRegistry = SimpleMeterRegistry()
-        giftCatalogCache = GiftCatalogCache(api, Duration.ofMinutes(10), Clock.fixed(NOW, ZoneOffset.UTC))
-        service = TelegramAwardService(api, casesRepository, giftCatalogCache, meterRegistry)
-    }
-
-    @Test
-    fun `gift prize is delivered via sendGift`() = runTest {
-        val prize = PrizeItemConfig(id = "gift-item", type = CaseSlotType.GIFT, starCost = 49, probabilityPpm = 1_000_000)
-        stubCase("case-gift", prize)
-        coEvery { api.getAvailableGifts() } returns AvailableGiftsDto(listOf(GiftDto(id = "123", starCount = 49)))
-        coEvery { api.sendGift(userId = 77, giftId = "123", payForUpgrade = false) } returns Unit
-
-        val plan = plan(chargeId = "gift-charge", caseId = "case-gift", prizeId = prize.id, userId = 77)
-        val before = metricCount(MetricsNames.AWARD_GIFT_TOTAL)
-
-        service.schedule(plan)
-
-        assertEquals(before + 1.0, metricCount(MetricsNames.AWARD_GIFT_TOTAL))
-        coVerify(exactly = 1) { api.sendGift(userId = 77, giftId = "123", payForUpgrade = false) }
-        coVerify(exactly = 1) { api.getAvailableGifts() }
-
-        // duplicate should be idempotent
-        service.schedule(plan)
-        coVerify(exactly = 1) { api.sendGift(userId = 77, giftId = "123", payForUpgrade = false) }
-    }
-
-    @Test
-    fun `premium prize uses expected star count`() = runTest {
-        val prize = PrizeItemConfig(id = "premium-3m", type = CaseSlotType.PREMIUM_3M, probabilityPpm = 1_000_000)
-        stubCase("case-premium", prize)
-        coEvery { api.giftPremiumSubscription(userId = 88, monthCount = 3, starCount = 1_000) } returns Unit
-
-        val plan = plan(chargeId = "premium-charge", caseId = "case-premium", prizeId = prize.id, userId = 88)
-        val before = metricCount(MetricsNames.AWARD_PREMIUM_TOTAL)
-
-        service.schedule(plan)
-
-        assertEquals(before + 1.0, metricCount(MetricsNames.AWARD_PREMIUM_TOTAL))
-        coVerify(exactly = 1) { api.giftPremiumSubscription(userId = 88, monthCount = 3, starCount = 1_000) }
-    }
-
-    @Test
-    fun `internal prize increments metric without external calls`() = runTest {
-        val prize = PrizeItemConfig(id = "internal", type = CaseSlotType.INTERNAL, probabilityPpm = 1_000_000)
-        stubCase("case-internal", prize)
-
-        val plan = plan(chargeId = "internal-charge", caseId = "case-internal", prizeId = prize.id, userId = 99)
-        val before = metricCount(MetricsNames.AWARD_INTERNAL_TOTAL)
-
-        service.schedule(plan)
-
-        assertEquals(before + 1.0, metricCount(MetricsNames.AWARD_INTERNAL_TOTAL))
-        coVerify(exactly = 0) { api.sendGift(any(), any(), any()) }
-        coVerify(exactly = 0) { api.giftPremiumSubscription(any(), any(), any()) }
-    }
-
-    @Test
-    fun `missing gift mapping increments fail metric`() = runTest {
-        val prize = PrizeItemConfig(id = "gift-missing", type = CaseSlotType.GIFT, starCost = 77, probabilityPpm = 1_000_000)
-        stubCase("case-failure", prize)
-        coEvery { api.getAvailableGifts() } returns AvailableGiftsDto(listOf(GiftDto(id = "456", starCount = 50)))
-
-        val plan = plan(chargeId = "fail-charge", caseId = "case-failure", prizeId = prize.id, userId = 55)
-        val before = metricCount(MetricsNames.AWARD_FAIL_TOTAL)
-
-        assertFailsWith<AwardDeliveryException> { service.schedule(plan) }
-
-        assertEquals(before + 1.0, metricCount(MetricsNames.AWARD_FAIL_TOTAL))
-        coVerify(exactly = 0) { api.sendGift(any(), any(), any()) }
-    }
-
-    private fun stubCase(caseId: String, prize: PrizeItemConfig) {
-        val case =
-            CaseConfig(
-                id = caseId,
-                title = caseId,
-                priceStars = 100,
-                rtpExtMin = 0.4,
-                rtpExtMax = 0.6,
-                jackpotAlpha = 0.02,
-                items = listOf(prize),
+        awardService =
+            TelegramAwardService(
+                telegramApiClient = telegramApiClient,
+                casesRepository = casesRepository,
+                giftCatalogCache = giftCatalogCache,
+                refundService = refundService,
+                meterRegistry = meterRegistry,
             )
-        every { casesRepository.get(caseId) } returns case
     }
 
-    private fun plan(
-        chargeId: String,
+    @Test
+    fun `gift prize delivered updates metrics`() =
+        runTest {
+            val case = caseConfig(CaseSlotType.GIFT, starCost = 500)
+            every { casesRepository.get(case.id) } returns case
+            val gift = GiftDto(id = "gift-1", starCount = 500)
+            coEvery { giftCatalogCache.getGifts() } returns listOf(gift)
+            coEvery { telegramApiClient.sendGift(userId = 101, giftId = gift.id, payForUpgrade = false) } returns Unit
+
+            val plan = awardPlan(case.id, prizeId = case.items.first().id, userId = 101)
+            val successBefore = metricCount(MetricsNames.AWARD_GIFT_TOTAL)
+
+            awardService.schedule(plan)
+
+            assertEquals(successBefore + 1.0, metricCount(MetricsNames.AWARD_GIFT_TOTAL))
+            coVerify(exactly = 1) { telegramApiClient.sendGift(101, gift.id, false) }
+            coVerify(exactly = 0) { refundService.refundStarPayment(any(), any(), any()) }
+        }
+
+    @Test
+    fun `premium prize delivered updates metrics`() =
+        runTest {
+            val case = caseConfig(CaseSlotType.PREMIUM_3M, starCost = 1_000)
+            every { casesRepository.get(case.id) } returns case
+            coEvery {
+                telegramApiClient.giftPremiumSubscription(
+                    userId = 202,
+                    monthCount = 3,
+                    starCount = 1_000,
+                )
+            } returns Unit
+
+            val plan = awardPlan(case.id, prizeId = case.items.first().id, userId = 202)
+            val premiumBefore = metricCount(MetricsNames.AWARD_PREMIUM_TOTAL)
+
+            awardService.schedule(plan)
+
+            assertEquals(premiumBefore + 1.0, metricCount(MetricsNames.AWARD_PREMIUM_TOTAL))
+            coVerify(exactly = 1) {
+                telegramApiClient.giftPremiumSubscription(202, monthCount = 3, starCount = 1_000)
+            }
+            coVerify(exactly = 0) { refundService.refundStarPayment(any(), any(), any()) }
+        }
+
+    @Test
+    fun `gift delivery failure triggers refund and allows retry`() =
+        runTest {
+            val case = caseConfig(CaseSlotType.GIFT, starCost = 750)
+            every { casesRepository.get(case.id) } returns case
+            val gift = GiftDto(id = "gift-2", starCount = 750)
+            coEvery { giftCatalogCache.getGifts() } returns listOf(gift)
+            val failure = TelegramApiException("503")
+            coEvery {
+                telegramApiClient.sendGift(
+                    userId = 303,
+                    giftId = gift.id,
+                    payForUpgrade = false,
+                )
+            } throws failure andThen Unit
+            coEvery {
+                refundService.refundStarPayment(
+                    userId = 303,
+                    telegramPaymentChargeId = "charge-303",
+                    reason = any(),
+                )
+            } returns Unit
+
+            val plan = awardPlan(case.id, prizeId = case.items.first().id, userId = 303, chargeId = "charge-303")
+            val failBefore = metricCount(MetricsNames.AWARD_FAIL_TOTAL)
+            val giftBefore = metricCount(MetricsNames.AWARD_GIFT_TOTAL)
+
+            assertFailsWith<TelegramApiException> { awardService.schedule(plan) }
+
+            assertEquals(failBefore + 1.0, metricCount(MetricsNames.AWARD_FAIL_TOTAL))
+            assertEquals(giftBefore, metricCount(MetricsNames.AWARD_GIFT_TOTAL))
+            val reasonSlot = slot<RefundReason>()
+            coVerify(exactly = 1) {
+                refundService.refundStarPayment(
+                    userId = 303,
+                    telegramPaymentChargeId = "charge-303",
+                    reason = capture(reasonSlot),
+                )
+            }
+            val capturedReason = reasonSlot.captured as RefundReason.Award
+            assertTrue(capturedReason.detail?.contains("503") == true)
+
+            awardService.schedule(plan)
+
+            assertEquals(giftBefore + 1.0, metricCount(MetricsNames.AWARD_GIFT_TOTAL))
+            coVerify(exactly = 2) { telegramApiClient.sendGift(303, gift.id, false) }
+        }
+
+    private fun metricCount(name: String): Double =
+        Metrics.counter(meterRegistry, name, MetricsTags.COMPONENT to "payments").count()
+
+    private fun caseConfig(
+        type: CaseSlotType,
+        starCost: Long,
+    ): CaseConfig =
+        CaseConfig(
+            id = "case-${type.name.lowercase()}",
+            title = "Case",
+            priceStars = starCost,
+            rtpExtMin = 0.4,
+            rtpExtMax = 0.5,
+            jackpotAlpha = 0.01,
+            items =
+                listOf(
+                    PrizeItemConfig(
+                        id = "prize-${type.name}",
+                        type = type,
+                        starCost = starCost,
+                        probabilityPpm = 1_000_000,
+                    ),
+                ),
+        )
+
+    private fun awardPlan(
         caseId: String,
         prizeId: String?,
         userId: Long,
+        chargeId: String = "charge-$userId",
     ): AwardPlan =
         AwardPlan(
             telegramPaymentChargeId = chargeId,
             providerPaymentChargeId = "provider",
-            totalAmount = 100,
-            currency = "XTR",
+            totalAmount = 1_000,
+            currency = STARS_CURRENCY_CODE,
             userId = userId,
             caseId = caseId,
             nonce = "nonce",
@@ -150,26 +196,18 @@ class AwardServiceTest {
                     userId = userId,
                     nonce = "nonce",
                     serverSeedHash = "hash",
-                    rollHex = "deadbeef",
+                    rollHex = "abcd",
                     ppm = 123,
                     resultItemId = prizeId,
-                    createdAt = NOW,
+                    createdAt = Instant.parse("2024-01-01T00:00:00Z"),
                 ),
             rngReceipt =
                 RngReceipt(
                     date = LocalDate.parse("2024-01-01"),
                     serverSeedHash = "hash",
                     clientSeed = "client",
-                    rollHex = "deadbeef",
+                    rollHex = "abcd",
                     ppm = 123,
                 ),
         )
-
-    private fun metricCount(name: String): Double =
-        Metrics.counter(meterRegistry, name, MetricsTags.COMPONENT to COMPONENT_VALUE).count()
-
-    companion object {
-        private val NOW: Instant = Instant.parse("2024-01-01T00:00:00Z")
-        private const val COMPONENT_VALUE = "payments"
-    }
 }

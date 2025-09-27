@@ -33,15 +33,20 @@ private const val CLEANUP_INTERVAL_MINUTES = 15L
 private const val DEFAULT_CLOSE_TIMEOUT_SECONDS = 5L
 private val DEFAULT_CLOSE_TIMEOUT: Duration = Duration.ofSeconds(DEFAULT_CLOSE_TIMEOUT_SECONDS)
 
+data class UpdateDispatcherSettings(
+    val queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
+    val dedupTtl: Duration = Duration.ofHours(DEFAULT_DEDUP_TTL_HOURS),
+    val workers: Int = 1,
+    val logger: Logger = LoggerFactory.getLogger(UpdateDispatcher::class.java),
+)
+
 class UpdateDispatcher(
     private val scope: CoroutineScope,
     private val meterRegistry: MeterRegistry,
-    private val queueCapacity: Int = DEFAULT_QUEUE_CAPACITY,
-    private val dedupTtl: Duration = Duration.ofHours(DEFAULT_DEDUP_TTL_HOURS),
-    private val workers: Int = 1,
-    private val logger: Logger = LoggerFactory.getLogger(UpdateDispatcher::class.java),
+    private val settings: UpdateDispatcherSettings = UpdateDispatcherSettings(),
     private val handleUpdate: suspend (IncomingUpdate) -> Unit = { _ -> },
 ) : UpdateSink {
+    private val logger = settings.logger
     private val started = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
 
@@ -50,7 +55,7 @@ class UpdateDispatcher(
 
     private val channel =
         Channel<IncomingUpdate>(
-            capacity = queueCapacity,
+            capacity = settings.queueCapacity,
             onBufferOverflow = BufferOverflow.DROP_OLDEST,
             onUndeliveredElement = { incoming ->
                 decrementQueueGauge()
@@ -82,7 +87,7 @@ class UpdateDispatcher(
 
     private val cleanupInterval = Duration.ofMinutes(CLEANUP_INTERVAL_MINUTES)
 
-    fun start(workers: Int = this.workers) {
+    fun start(workers: Int = settings.workers.coerceAtLeast(1)) {
         if (closed.get()) {
             logger.warn("Dispatcher already closed")
             return
@@ -117,7 +122,7 @@ class UpdateDispatcher(
                 .launch(cleanupExceptionHandler + Dispatchers.IO + CoroutineName("dispatcher-cleanup")) {
                     while (isActive) {
                         delay(cleanupInterval.toMillis())
-                        val threshold = System.currentTimeMillis() - dedupTtl.toMillis()
+                        val threshold = System.currentTimeMillis() - settings.dedupTtl.toMillis()
                         seen.entries.removeIf { it.value < threshold }
                     }
                 }.also { job ->
@@ -131,8 +136,8 @@ class UpdateDispatcher(
         logger.info(
             "UpdateDispatcher started: workers={}, capacity={}, ttl={}",
             workerCount,
-            queueCapacity,
-            dedupTtl,
+            settings.queueCapacity,
+            settings.dedupTtl,
         )
     }
 
@@ -189,29 +194,24 @@ class UpdateDispatcher(
 
     private suspend fun processIncoming(incoming: IncomingUpdate) {
         val startNanos = System.nanoTime()
-        try {
-            logger.info("queue processing updateId={}", incoming.updateId)
-            val outcome = runCatching { handle(incoming) }
-            outcome.onSuccess { metrics.markProcessed() }
-            outcome.exceptionOrNull()?.let { throwable ->
-                if (throwable is CancellationException) {
-                    throw throwable
-                }
-                logger.error("queue handling failed: updateId={}", incoming.updateId, throwable)
+        val result =
+            runCatching {
+                logger.info(
+                    "queue handled updateId={} type={}",
+                    incoming.updateId,
+                    incoming::class.simpleName,
+                )
+                handleUpdate(incoming)
+                metrics.markProcessed()
             }
-        } finally {
-            val elapsedNanos = System.nanoTime() - startNanos
-            metrics.recordHandleDuration(elapsedNanos)
+        result.exceptionOrNull()?.let { exception ->
+            if (exception is CancellationException) {
+                throw exception
+            }
+            logger.error("queue handling failed: updateId={}", incoming.updateId, exception)
         }
-    }
-
-    private suspend fun handle(incoming: IncomingUpdate) {
-        logger.info(
-            "queue handled updateId={} type={}",
-            incoming.updateId,
-            incoming::class.simpleName,
-        )
-        handleUpdate(incoming)
+        val elapsedNanos = System.nanoTime() - startNanos
+        metrics.recordHandleDuration(elapsedNanos)
     }
 
     private fun incrementQueueGauge() {

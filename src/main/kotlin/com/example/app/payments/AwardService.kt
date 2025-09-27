@@ -3,8 +3,6 @@ package com.example.app.payments
 import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
-import com.example.app.payments.RefundReason
-import com.example.app.payments.RefundService
 import com.example.giftsbot.economy.CaseSlotType
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.economy.PrizeItemConfig
@@ -45,35 +43,51 @@ internal class TelegramAwardService(
             logDuplicate(plan, previous)
             return
         }
+        runAwardFlow(plan)
+    }
 
-        try {
-            val prize = resolvePrize(plan)
-            val outcome =
-                when (prize?.type) {
-                    CaseSlotType.GIFT -> deliverGift(plan, prize)
-                    CaseSlotType.PREMIUM_3M -> deliverPremium(plan, prize.id, monthCount = 3, starCount = PREMIUM_3_MONTHS_STARS)
-                    CaseSlotType.PREMIUM_6M -> deliverPremium(plan, prize.id, monthCount = 6, starCount = PREMIUM_6_MONTHS_STARS)
-                    CaseSlotType.PREMIUM_12M -> deliverPremium(plan, prize.id, monthCount = 12, starCount = PREMIUM_12_MONTHS_STARS)
-                    CaseSlotType.INTERNAL, null -> deliverInternal(plan, prize?.id)
-                }
-            journal[chargeId] = outcome
-        } catch (cancellation: CancellationException) {
+    private suspend fun runAwardFlow(plan: AwardPlan) {
+        val chargeId = plan.telegramPaymentChargeId
+        val outcome = runCatching { deliverPrize(plan) }
+        outcome.onSuccess { journal[chargeId] = it }
+        outcome.onFailure { cause -> handleDeliveryFailure(plan, chargeId, cause) }
+    }
+
+    private suspend fun handleDeliveryFailure(
+        plan: AwardPlan,
+        chargeId: String,
+        cause: Throwable,
+    ) {
+        if (cause is CancellationException) {
             journal.remove(chargeId, AwardJournalEntry.InProgress)
-            throw cancellation
-        } catch (cause: Throwable) {
-            journal.remove(chargeId, AwardJournalEntry.InProgress)
-            failCounter.increment()
-            refundIfPossible(plan, cause)
-            logger.error(
-                "award delivery failed: chargeId={} userId={} caseId={} prizeId={} reason={}",
-                chargeId,
-                plan.userId,
-                plan.caseId,
-                plan.resultItemId,
-                cause.message,
-                cause,
-            )
             throw cause
+        }
+        journal.remove(chargeId, AwardJournalEntry.InProgress)
+        failCounter.increment()
+        refundIfPossible(plan, cause)
+        logger.error(
+            "award delivery failed: chargeId={} userId={} caseId={} prizeId={} reason={}",
+            chargeId,
+            plan.userId,
+            plan.caseId,
+            plan.resultItemId,
+            cause.message,
+            cause,
+        )
+        throw cause
+    }
+
+    private suspend fun deliverPrize(plan: AwardPlan): AwardJournalEntry.Completed {
+        val prize = resolvePrize(plan)
+        return when (prize?.type) {
+            CaseSlotType.GIFT -> deliverGift(plan, prize)
+            CaseSlotType.PREMIUM_3M ->
+                deliverPremium(plan, prize.id, monthCount = 3, starCount = PREMIUM_3_MONTHS_STARS)
+            CaseSlotType.PREMIUM_6M ->
+                deliverPremium(plan, prize.id, monthCount = 6, starCount = PREMIUM_6_MONTHS_STARS)
+            CaseSlotType.PREMIUM_12M ->
+                deliverPremium(plan, prize.id, monthCount = 12, starCount = PREMIUM_12_MONTHS_STARS)
+            CaseSlotType.INTERNAL, null -> deliverInternal(plan, prize?.id)
         }
     }
 
@@ -83,10 +97,11 @@ internal class TelegramAwardService(
     ): AwardJournalEntry.Completed {
         val starCost = prize.starCost ?: throw AwardDeliveryException("gift_star_cost_missing prizeId=${prize.id}")
         val gifts = giftCatalogCache.getGifts()
-        val gift = selectGift(gifts, starCost)
-            ?: throw AwardDeliveryException(
-                "gift_not_found caseId=${plan.caseId} prizeId=${prize.id} starCost=$starCost",
-            )
+        val gift =
+            selectGift(gifts, starCost, logger)
+                ?: throw AwardDeliveryException(
+                    "gift_not_found caseId=${plan.caseId} prizeId=${prize.id} starCost=$starCost",
+                )
         telegramApiClient.sendGift(userId = plan.userId, giftId = gift.id, payForUpgrade = false)
         giftCounter.increment()
         logger.info(
@@ -152,20 +167,6 @@ internal class TelegramAwardService(
             ?: throw AwardDeliveryException("prize_not_found caseId=${plan.caseId} prizeId=$prizeId")
     }
 
-    private fun selectGift(
-        gifts: List<GiftDto>,
-        starCost: Long,
-    ): GiftDto? {
-        val candidates = gifts.filter { it.starCount == starCost }
-        if (candidates.isEmpty()) {
-            return null
-        }
-        if (candidates.size > 1) {
-            logger.warn("multiple gifts matched starCost={} count={} choosing first", starCost, candidates.size)
-        }
-        return candidates.first()
-    }
-
     private fun logDuplicate(
         plan: AwardPlan,
         entry: AwardJournalEntry,
@@ -189,7 +190,7 @@ internal class TelegramAwardService(
         )
     }
 
-    private fun refundIfPossible(
+    private suspend fun refundIfPossible(
         plan: AwardPlan,
         cause: Throwable,
     ) {
@@ -231,7 +232,9 @@ internal class TelegramAwardService(
     }
 }
 
-internal class AwardDeliveryException(message: String) : RuntimeException(message)
+internal class AwardDeliveryException(
+    message: String,
+) : RuntimeException(message)
 
 private sealed interface AwardJournalEntry {
     data class Completed(
@@ -247,4 +250,19 @@ private enum class AwardKind {
     GIFT,
     PREMIUM,
     INTERNAL,
+}
+
+private fun selectGift(
+    gifts: List<GiftDto>,
+    starCost: Long,
+    logger: org.slf4j.Logger,
+): GiftDto? {
+    val candidates = gifts.filter { it.starCount == starCost }
+    if (candidates.isEmpty()) {
+        return null
+    }
+    if (candidates.size > 1) {
+        logger.warn("multiple gifts matched starCost={} count={} choosing first", starCost, candidates.size)
+    }
+    return candidates.first()
 }

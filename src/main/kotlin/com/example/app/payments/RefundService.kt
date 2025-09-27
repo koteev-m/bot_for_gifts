@@ -43,7 +43,7 @@ class RefundService(
                 return
             }
             is BeginResult.Start -> {
-                executeRefund(userId, normalizedChargeId, reason, startDecision.attempt)
+                executeRefund(userId, normalizedChargeId, reason, startDecision.entry.attempt)
             }
         }
     }
@@ -83,8 +83,7 @@ class RefundService(
                 val duration = Duration.between(startedAt, clock.instant())
                 finishSuccess(chargeId, reason, attempt, duration)
                 logSuccess(userId, chargeId, reason, attempt, duration)
-            }
-            .onFailure { cause ->
+            }.onFailure { cause ->
                 finishFailure(chargeId, reason, attempt, cause)
                 logFailure(userId, chargeId, reason, attempt, cause)
                 throw cause
@@ -222,9 +221,13 @@ class RefundService(
     }
 
     private sealed interface BeginResult {
-        data class Start(val entry: RefundJournalEntry.InProgress) : BeginResult
+        data class Start(
+            val entry: RefundJournalEntry.InProgress,
+        ) : BeginResult
 
-        data class Skip(val previous: RefundJournalEntry?) : BeginResult
+        data class Skip(
+            val previous: RefundJournalEntry?,
+        ) : BeginResult
     }
 
     private sealed interface RefundJournalEntry {
@@ -264,15 +267,21 @@ sealed interface RefundReason {
     val code: String
     val detail: String?
 
-    data class Validation(override val detail: String) : RefundReason {
+    data class Validation(
+        override val detail: String,
+    ) : RefundReason {
         override val code: String = "validation_failure"
     }
 
-    data class Draw(override val detail: String) : RefundReason {
+    data class Draw(
+        override val detail: String,
+    ) : RefundReason {
         override val code: String = "draw_failure"
     }
 
-    data class Award(override val detail: String) : RefundReason {
+    data class Award(
+        override val detail: String,
+    ) : RefundReason {
         override val code: String = "award_failure"
     }
 }

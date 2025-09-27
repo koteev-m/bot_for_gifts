@@ -14,30 +14,35 @@ internal class GiftCatalogCache(
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val mutex = Mutex()
+
     @Volatile
     private var state: CacheState? = null
 
-    suspend fun getGifts(): List<GiftDto> {
-        if (ttl.isZero || ttl.isNegative) {
-            return telegramApiClient.getAvailableGifts().gifts
+    suspend fun getGifts(): List<GiftDto> =
+        when {
+            ttl.isZero || ttl.isNegative -> fetchFresh()
+            else -> readFromCache() ?: refreshCache()
         }
+
+    private suspend fun readFromCache(): List<GiftDto>? {
         val now = clock.instant()
-        val cached = state
-        if (cached != null && now.isBefore(cached.expiresAt)) {
-            return cached.gifts
-        }
-        return mutex.withLock {
-            val refreshed = state
-            val refreshedNow = clock.instant()
-            if (refreshed != null && refreshedNow.isBefore(refreshed.expiresAt)) {
-                return@withLock refreshed.gifts
+        return state?.takeIf { now.isBefore(it.expiresAt) }?.gifts
+    }
+
+    private suspend fun refreshCache(): List<GiftDto> =
+        mutex.withLock {
+            val cached = readFromCache()
+            if (cached != null) {
+                return@withLock cached
             }
+            val fetchedAt = clock.instant()
             val response = telegramApiClient.getAvailableGifts()
-            val updated = CacheState(response.gifts, refreshedNow.plus(ttl))
+            val updated = CacheState(response.gifts, fetchedAt.plus(ttl))
             state = updated
             updated.gifts
         }
-    }
+
+    private suspend fun fetchFresh(): List<GiftDto> = telegramApiClient.getAvailableGifts().gifts
 
     private data class CacheState(
         val gifts: List<GiftDto>,
