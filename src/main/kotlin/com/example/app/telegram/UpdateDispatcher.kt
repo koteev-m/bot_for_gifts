@@ -40,6 +40,7 @@ class UpdateDispatcher(
     private val dedupTtl: Duration = Duration.ofHours(DEFAULT_DEDUP_TTL_HOURS),
     private val workers: Int = 1,
     private val logger: Logger = LoggerFactory.getLogger(UpdateDispatcher::class.java),
+    private val handleUpdate: suspend (IncomingUpdate) -> Unit = { _ -> },
 ) : UpdateSink {
     private val started = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
@@ -210,6 +211,7 @@ class UpdateDispatcher(
             incoming.updateId,
             incoming::class.simpleName,
         )
+        handleUpdate(incoming)
     }
 
     private fun incrementQueueGauge() {

@@ -38,6 +38,8 @@ object MetricsNames {
     const val ADMIN_DELETE_TOTAL = "tg_admin_webhook_delete_total"
     const val ADMIN_INFO_TOTAL = "tg_admin_webhook_info_total"
     const val ADMIN_FAIL_TOTAL = "tg_admin_webhook_fail_total"
+
+    const val PRE_CHECKOUT_TOTAL = "tg_pre_checkout_total"
 }
 
 object MetricsTags {

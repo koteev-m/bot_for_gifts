@@ -141,6 +141,34 @@ class TelegramApiClient(
         return execute(methodName = "createInvoiceLink", body = request)
     }
 
+    suspend fun answerPreCheckoutQuery(
+        queryId: String,
+        ok: Boolean,
+        errorMessage: String? = null,
+    ): Boolean {
+        val sanitizedError = errorMessage?.trim()?.takeUnless { it.isEmpty() }?.takeIf { !ok }
+        logger.debug(
+            "answerPreCheckoutQuery request id={} ok={} hasErrorMessage={}",
+            queryId,
+            ok,
+            sanitizedError != null,
+        )
+        val result =
+            execute<Boolean>(
+                methodName = "answerPreCheckoutQuery",
+                body =
+                    AnswerPreCheckoutQueryRequest(
+                        preCheckoutQueryId = queryId,
+                        ok = ok,
+                        errorMessage = sanitizedError,
+                    ),
+            )
+        if (result) {
+            return true
+        }
+        throw TelegramApiException("Telegram API answerPreCheckoutQuery returned false result")
+    }
+
     suspend fun getUpdates(
         offset: Long?,
         timeoutSeconds: Int,
@@ -305,6 +333,15 @@ private data class SetWebhookRequest(
 private data class DeleteWebhookRequest(
     @SerialName("drop_pending_updates")
     val dropPendingUpdates: Boolean,
+)
+
+@Serializable
+private data class AnswerPreCheckoutQueryRequest(
+    @SerialName("pre_checkout_query_id")
+    val preCheckoutQueryId: String,
+    val ok: Boolean,
+    @SerialName("error_message")
+    val errorMessage: String? = null,
 )
 
 @Serializable
