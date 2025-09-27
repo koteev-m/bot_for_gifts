@@ -280,7 +280,3 @@ class SuccessfulPaymentHandler(
         private val logger = LoggerFactory.getLogger(SuccessfulPaymentHandler::class.java)
     }
 }
-
-interface AwardService {
-    suspend fun schedule(plan: AwardPlan)
-}

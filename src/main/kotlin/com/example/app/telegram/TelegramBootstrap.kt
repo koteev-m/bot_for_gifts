@@ -1,9 +1,10 @@
 package com.example.app.telegram
 
-import com.example.app.payments.AwardPlan
 import com.example.app.payments.AwardService
+import com.example.app.payments.GiftCatalogCache
 import com.example.app.payments.PreCheckoutHandler
 import com.example.app.payments.SuccessfulPaymentHandler
+import com.example.app.payments.TelegramAwardService
 import com.example.app.payments.loadPaymentsConfig
 import com.example.app.rng.getRngService
 import com.example.app.util.configValue
@@ -39,7 +40,7 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
             telegramApiClient = api,
             rngService = getRngService(),
             casesRepository = casesRepository,
-            awardService = createAwardService(),
+            awardService = createAwardService(api, casesRepository, meterRegistry),
             paymentsConfig = paymentsConfig,
             meterRegistry = meterRegistry,
         )
@@ -82,13 +83,19 @@ fun Application.installTelegramIntegration(meterRegistry: MeterRegistry) {
     )
 }
 
-private fun createAwardService(): AwardService =
-    object : AwardService {
-        @Suppress("UNUSED_PARAMETER")
-        override suspend fun schedule(plan: AwardPlan) {
-            // Award pipeline will be implemented in the next step.
-        }
-    }
+private fun createAwardService(
+    api: TelegramApiClient,
+    casesRepository: CasesRepository,
+    meterRegistry: MeterRegistry,
+): AwardService {
+    val giftCatalogCache = GiftCatalogCache(api)
+    return TelegramAwardService(
+        telegramApiClient = api,
+        casesRepository = casesRepository,
+        giftCatalogCache = giftCatalogCache,
+        meterRegistry = meterRegistry,
+    )
+}
 
 private fun Application.loadTelegramIntegrationConfig(): TelegramIntegrationConfig {
     val botToken =
