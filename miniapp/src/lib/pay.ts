@@ -18,6 +18,15 @@ export const openInvoice = async (invoiceLink: string): Promise<InvoiceStatus> =
       resolve(status);
     };
 
+    const handleInvoiceStatus = (status: unknown) => {
+      if (status === 'paid' || status === 'cancelled' || status === 'failed') {
+        resolveOnce(status);
+        return;
+      }
+
+      resolveOnce('failed');
+    };
+
     const handleReject = (reason: unknown) => {
       if (settled) {
         return;
@@ -31,7 +40,7 @@ export const openInvoice = async (invoiceLink: string): Promise<InvoiceStatus> =
     };
 
     try {
-      const openResult = webApp.openInvoice(invoiceLink, resolveOnce);
+      const openResult = webApp.openInvoice(invoiceLink, handleInvoiceStatus);
       Promise.resolve(openResult)
         .then((opened) => {
           if (opened === false) {

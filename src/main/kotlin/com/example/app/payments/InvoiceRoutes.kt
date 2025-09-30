@@ -12,10 +12,12 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
+import java.math.BigInteger
 import java.security.SecureRandom
-import java.util.Base64
 
-private const val NONCE_BYTES: Int = 16
+private const val NONCE_BYTES: Int = 12
+private const val BASE62_ALPHABET: String = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+private val BASE62_RADIX: BigInteger = BigInteger.valueOf(BASE62_ALPHABET.length.toLong())
 private val secureRandom: SecureRandom = SecureRandom()
 
 fun Route.registerMiniAppInvoiceRoutes(
@@ -65,5 +67,18 @@ private data class CreateMiniAppInvoiceRequest(
 private fun generateNonce(): String {
     val buffer = ByteArray(NONCE_BYTES)
     secureRandom.nextBytes(buffer)
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(buffer)
+    var value = BigInteger(1, buffer)
+    if (value == BigInteger.ZERO) {
+        return BASE62_ALPHABET.first().toString()
+    }
+
+    val builder = StringBuilder()
+    while (value > BigInteger.ZERO) {
+        val division = value.divideAndRemainder(BASE62_RADIX)
+        val remainder = division[1].toInt()
+        builder.append(BASE62_ALPHABET[remainder])
+        value = division[0]
+    }
+
+    return builder.reverse().toString()
 }

@@ -35,6 +35,11 @@ interface PaymentState {
   message: string;
 }
 
+interface InvoiceResponsePayload {
+  invoiceLink: string;
+  payload: string;
+}
+
 const useTelegramTheme = (): [ResolvedTelegramTheme, () => void] => {
   const [theme, setTheme] = useState<ResolvedTelegramTheme>(() => resolveTelegramTheme());
 
@@ -110,6 +115,23 @@ const parseMiniCases = (data: unknown): MiniCase[] => {
 
     return [];
   });
+};
+
+const parseInvoiceResponse = (data: unknown): InvoiceResponsePayload | null => {
+  if (!isRecord(data)) {
+    return null;
+  }
+
+  const { invoiceLink, payload } = data;
+  if (typeof invoiceLink !== 'string' || invoiceLink.trim().length === 0) {
+    return null;
+  }
+
+  if (typeof payload !== 'string' || payload.trim().length === 0) {
+    return null;
+  }
+
+  return { invoiceLink: invoiceLink.trim(), payload: payload.trim() };
 };
 
 const useMiniCases = (): MiniCasesState => {
@@ -354,15 +376,13 @@ const App = () => {
       }
 
       const payload: unknown = await response.json();
-      const invoiceLink =
-        isRecord(payload) && typeof payload.invoiceLink === 'string'
-          ? payload.invoiceLink.trim()
-          : '';
+      const invoiceResponse = parseInvoiceResponse(payload);
 
-      if (!invoiceLink) {
-        throw new Error('Сервер не вернул ссылку на оплату.');
+      if (!invoiceResponse) {
+        throw new Error('Сервер вернул некорректные данные счёта.');
       }
 
+      const { invoiceLink } = invoiceResponse;
       const invoiceStatus = await openInvoice(invoiceLink);
       switch (invoiceStatus) {
         case 'paid':
@@ -455,7 +475,10 @@ const App = () => {
               role="status"
               aria-live="polite"
             >
-              {paymentState.message}
+              <span className="payment-status__state">
+                Статус оплаты: <strong>{paymentState.status}</strong>
+              </span>
+              <span className="payment-status__message">{paymentState.message}</span>
             </div>
           ) : null}
 
