@@ -4,6 +4,8 @@ import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
 import com.example.app.payments.dto.PaymentPayload
+import com.example.giftsbot.antifraud.PaymentsHardening
+import com.example.giftsbot.antifraud.velocity.AfEventType
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.rng.RngService
 import com.example.giftsbot.rng.buildUserReceiptText
@@ -34,6 +36,7 @@ class SuccessfulPaymentHandler(
         updateId: Long,
         message: MessageDto,
     ) {
+        applyAntifraud(updateId, message)
         when (val decision = prepareProcessing(message)) {
             is ProcessingDecision.Process ->
                 processPayment(updateId, message, decision)
@@ -115,6 +118,38 @@ class SuccessfulPaymentHandler(
             resultItemId = drawResult.record.resultItemId,
             rngRecord = drawResult.record,
             rngReceipt = drawResult.receipt,
+        )
+    }
+
+    private suspend fun applyAntifraud(
+        updateId: Long,
+        message: MessageDto,
+    ) {
+        val stored = PaymentsHardening.consumeUpdateContext(updateId)
+        val context = PaymentsHardening.context()
+        val velocity = context?.velocityChecker
+        val hasContext = context != null && stored != null
+        val enabled = context?.velocityEnabled == true
+        val hasVelocity = velocity != null
+        if (!hasContext || !enabled || !hasVelocity) {
+            return
+        }
+        val actualContext = context!!
+        val actualStored = stored!!
+        val actualVelocity = velocity!!
+        PaymentsHardening.checkAndMaybeAutoban(
+            call = actualStored.call,
+            eventType = AfEventType.SUCCESS,
+            ip = actualStored.ip,
+            subjectId = actualStored.subjectId ?: message.from?.id,
+            path = "/telegram/success",
+            ua = actualStored.userAgent,
+            velocity = actualVelocity,
+            suspiciousStore = actualContext.suspiciousIpStore,
+            meterRegistry = actualContext.meterRegistry,
+            autobanEnabled = actualContext.autobanEnabled,
+            autobanScore = actualContext.autobanScore,
+            autobanTtlSeconds = actualContext.autobanTtlSeconds,
         )
     }
 

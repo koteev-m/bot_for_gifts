@@ -4,6 +4,9 @@ import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
 import com.example.app.payments.dto.PaymentPayload
+import com.example.giftsbot.antifraud.PaymentsHardening
+import com.example.giftsbot.antifraud.velocity.AfEventType
+import com.example.giftsbot.antifraud.velocity.VelocityAction
 import com.example.giftsbot.economy.CaseConfig
 import com.example.giftsbot.economy.CasesRepository
 import com.example.giftsbot.telegram.PreCheckoutQueryDto
@@ -23,6 +26,9 @@ class PreCheckoutHandler(
         updateId: Long,
         query: PreCheckoutQueryDto,
     ) = withTimeout(RESPONSE_TIMEOUT_MILLIS) {
+        if (!runAntifraud(updateId, query)) {
+            return@withTimeout
+        }
         when (val validation = validate(query)) {
             is ValidationResult.Success -> respondSuccess(updateId, query, validation)
             is ValidationResult.Failure -> respondFailure(updateId, query, validation)
@@ -49,6 +55,43 @@ class PreCheckoutHandler(
             ok = true,
             errorMessage = null,
         )
+    }
+
+    private suspend fun runAntifraud(
+        updateId: Long,
+        query: PreCheckoutQueryDto,
+    ): Boolean {
+        val context = PaymentsHardening.context()
+        val stored = PaymentsHardening.consumeUpdateContext(updateId)
+        val velocity = context?.velocityChecker
+        val skip = context == null || !context.velocityEnabled || velocity == null || stored == null
+        if (skip) {
+            return true
+        }
+        val outcome =
+            PaymentsHardening.checkAndMaybeAutoban(
+                call = stored.call,
+                eventType = AfEventType.PRE_CHECKOUT,
+                ip = stored.ip,
+                subjectId = stored.subjectId ?: query.from.id,
+                path = "/telegram/pre-checkout",
+                ua = stored.userAgent,
+                velocity = velocity,
+                suspiciousStore = context.suspiciousIpStore,
+                meterRegistry = context.meterRegistry,
+                autobanEnabled = context.autobanEnabled,
+                autobanScore = context.autobanScore,
+                autobanTtlSeconds = context.autobanTtlSeconds,
+            )
+        val blocked = outcome.decision.action == VelocityAction.HARD_BLOCK_BEFORE_PAYMENT
+        if (blocked) {
+            context
+                .meterRegistry
+                .counter("pay_af_blocks_total", "type", "precheckout")
+                .increment()
+            PaymentsHardening.answerPreCheckoutLimited(telegramApiClient, query.id)
+        }
+        return !blocked
     }
 
     private suspend fun respondFailure(
