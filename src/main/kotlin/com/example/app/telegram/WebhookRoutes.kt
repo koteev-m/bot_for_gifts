@@ -4,6 +4,9 @@ import com.example.app.observability.Metrics
 import com.example.app.observability.MetricsNames
 import com.example.app.observability.MetricsTags
 import com.example.app.telegram.dto.UpdateDto
+import com.example.giftsbot.antifraud.PaymentsHardening
+import com.example.giftsbot.antifraud.extractClientIp
+import com.example.giftsbot.antifraud.velocity.AfEventType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -76,9 +79,55 @@ fun Route.telegramWebhookRoutes(
                 }
 
             metrics.markAccepted(updates.size)
+            applyWebhookAntifraud(call, webhookPath, updates)
             logAcceptedUpdates(call, updates)
             enqueueUpdates(call, sink, updates, metrics)
             call.respondText("ok")
+        }
+    }
+}
+
+private suspend fun applyWebhookAntifraud(
+    call: ApplicationCall,
+    webhookPath: String,
+    updates: List<UpdateDto>,
+) {
+    if (updates.isEmpty()) {
+        return
+    }
+    val context = PaymentsHardening.context(call.application) ?: return
+    val ip = extractClientIp(call, context.trustProxy)
+    val userAgent = call.request.header(HttpHeaders.UserAgent)
+    val velocity = context.velocityChecker
+    val velocityActive = context.velocityEnabled && velocity != null
+    for (update in updates) {
+        val subjectId = update.message?.from?.id ?: update.pre_checkout_query?.from?.id
+        val needsContext = update.pre_checkout_query != null || update.message?.successful_payment != null
+        if (needsContext) {
+            PaymentsHardening.rememberUpdateContext(
+                updateId = update.update_id,
+                call = call,
+                ip = ip,
+                subjectId = subjectId,
+                userAgent = userAgent,
+            )
+        }
+        if (velocityActive) {
+            val checker = velocity ?: continue
+            PaymentsHardening.checkAndMaybeAutoban(
+                call = call,
+                eventType = AfEventType.WEBHOOK,
+                ip = ip,
+                subjectId = subjectId,
+                path = webhookPath,
+                ua = userAgent,
+                velocity = checker,
+                suspiciousStore = context.suspiciousIpStore,
+                meterRegistry = context.meterRegistry,
+                autobanEnabled = context.autobanEnabled,
+                autobanScore = context.autobanScore,
+                autobanTtlSeconds = context.autobanTtlSeconds,
+            )
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.example.giftsbot.antifraud
 
 import com.example.giftsbot.antifraud.store.InMemoryBucketStore
+import com.example.giftsbot.antifraud.velocity.VelocityChecker
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
@@ -23,6 +24,10 @@ private const val CONFIG_EXCLUDE_PATHS = "$CONFIG_PREFIX.rl.excludePaths"
 private const val CONFIG_RETRY_AFTER = "$CONFIG_PREFIX.rl.retryAfter"
 private const val CONFIG_ADMIN_TOKEN = "$CONFIG_PREFIX.admin.token"
 private const val CONFIG_BAN_DEFAULT_TTL = "$CONFIG_PREFIX.ban.defaultTtlSeconds"
+private const val CONFIG_VELOCITY_ENABLED = "$CONFIG_PREFIX.velocity.enabled"
+private const val CONFIG_AUTOBAN_ENABLED = "$CONFIG_PREFIX.velocity.autoban.enabled"
+private const val CONFIG_AUTOBAN_SCORE = "$CONFIG_PREFIX.velocity.autoban.score"
+private const val CONFIG_AUTOBAN_TTL = "$CONFIG_PREFIX.velocity.autoban.ttlSeconds"
 
 private const val ENV_IP_ENABLED = "RL_IP_ENABLED"
 private const val ENV_IP_RPS = "RL_IP_RPS"
@@ -38,6 +43,10 @@ private const val ENV_EXCLUDE_PATHS = "RL_EXCLUDE_PATHS"
 private const val ENV_RETRY_AFTER = "RL_RETRY_AFTER_SECONDS"
 private const val ENV_ADMIN_TOKEN = "ADMIN_TOKEN"
 private const val ENV_BAN_DEFAULT_TTL = "RL_BAN_DEFAULT_TTL_SECONDS"
+private const val ENV_VELOCITY_ENABLED = "VELOCITY_ENABLED"
+private const val ENV_AUTOBAN_ENABLED = "RL_AUTOBAN_ENABLED"
+private const val ENV_AUTOBAN_SCORE = "RL_AUTOBAN_SCORE"
+private const val ENV_AUTOBAN_TTL = "RL_AUTOBAN_TTL_SECONDS"
 
 val SUSPICIOUS_IP_STORE_KEY: AttributeKey<SuspiciousIpStore> = AttributeKey("antifraud.suspiciousIpStore")
 
@@ -54,6 +63,25 @@ fun Application.installAntifraudIntegration(
     if (!attributes.contains(SUSPICIOUS_IP_STORE_KEY)) {
         attributes.put(SUSPICIOUS_IP_STORE_KEY, suspiciousIpStore)
     }
+    val velocityEnabled = readBoolean(ENV_VELOCITY_ENABLED, CONFIG_VELOCITY_ENABLED, default = true)
+    val autobanEnabled = readBoolean(ENV_AUTOBAN_ENABLED, CONFIG_AUTOBAN_ENABLED, default = false)
+    val autobanScore = readInt(ENV_AUTOBAN_SCORE, CONFIG_AUTOBAN_SCORE, default = 90).coerceAtLeast(0)
+    val autobanTtlSeconds = readLong(ENV_AUTOBAN_TTL, CONFIG_AUTOBAN_TTL, default = 3600L, allowZero = true)
+    val velocityChecker = if (velocityEnabled) VelocityChecker() else null
+    val paymentsContext =
+        PaymentsAntifraudContext(
+            velocityEnabled = velocityEnabled,
+            trustProxy = rateLimitConfig.trustProxy,
+            autobanEnabled = autobanEnabled,
+            autobanScore = autobanScore,
+            autobanTtlSeconds = autobanTtlSeconds,
+            retryAfterSeconds = rateLimitConfig.retryAfterFallbackSeconds,
+            velocityChecker = velocityChecker,
+            suspiciousIpStore = suspiciousIpStore,
+            meterRegistry = meterRegistry,
+        )
+    attributes.put(PAYMENTS_AF_CONTEXT_KEY, paymentsContext)
+    PaymentsHardening.configure(paymentsContext)
     val adminToken = readAdminToken()
     val defaultBanTtl = readBanDefaultTtl()
     install(RateLimitPlugin) {
@@ -79,7 +107,9 @@ fun Application.installAntifraudIntegration(
     environment.log.info(
         "Antifraud installed (ip=${if (rateLimitConfig.ipEnabled) "on" else "off"}, " +
             "subject=${if (rateLimitConfig.subjectEnabled) "on" else "off"}, " +
-            "trustProxy=${if (rateLimitConfig.trustProxy) "on" else "off"})",
+            "trustProxy=${if (rateLimitConfig.trustProxy) "on" else "off"}, " +
+            "velocity=${if (velocityEnabled) "on" else "off"}, " +
+            "autoban=${if (autobanEnabled) "on" else "off"})",
     )
 }
 

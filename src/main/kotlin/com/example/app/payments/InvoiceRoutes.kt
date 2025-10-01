@@ -3,9 +3,17 @@ package com.example.app.payments
 import com.example.app.api.errorResponse
 import com.example.app.webapp.WebAppAuth
 import com.example.app.webapp.WebAppAuthPlugin
+import com.example.giftsbot.antifraud.PaymentsHardening
+import com.example.giftsbot.antifraud.extractClientIp
+import com.example.giftsbot.antifraud.extractSubjectId
+import com.example.giftsbot.antifraud.velocity.AfEventType
+import com.example.giftsbot.antifraud.velocity.VelocityAction
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.plugins.callid.callId
+import io.ktor.server.request.header
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -45,6 +53,10 @@ fun Route.registerMiniAppInvoiceRoutes(
                 return@post
             }
 
+            if (!call.applyInvoiceAntifraud()) {
+                return@post
+            }
+
             val userId = call.attributes[WebAppAuth.UserIdKey]
             val nonce = generateNonce()
             val response =
@@ -81,4 +93,49 @@ private fun generateNonce(): String {
     }
 
     return builder.reverse().toString()
+}
+
+private fun resolveSubjectFromWebApp(call: ApplicationCall): Long? =
+    if (call.attributes.contains(WebAppAuth.UserIdKey)) {
+        call.attributes[WebAppAuth.UserIdKey]
+    } else {
+        null
+    }
+
+private suspend fun ApplicationCall.applyInvoiceAntifraud(): Boolean {
+    val context = PaymentsHardening.context(application)
+    val velocity = context?.velocityChecker
+    if (context == null || !context.velocityEnabled || velocity == null) {
+        return true
+    }
+    val subjectId = extractSubjectId(this) ?: resolveSubjectFromWebApp(this)
+    val outcome =
+        PaymentsHardening.checkAndMaybeAutoban(
+            call = this,
+            eventType = AfEventType.INVOICE,
+            ip = extractClientIp(this, context.trustProxy),
+            subjectId = subjectId,
+            path = "/api/miniapp/invoice",
+            ua = request.header(HttpHeaders.UserAgent),
+            velocity = velocity,
+            suspiciousStore = context.suspiciousIpStore,
+            meterRegistry = context.meterRegistry,
+            autobanEnabled = context.autobanEnabled,
+            autobanScore = context.autobanScore,
+            autobanTtlSeconds = context.autobanTtlSeconds,
+        )
+    val blocked = outcome.decision.action == VelocityAction.HARD_BLOCK_BEFORE_PAYMENT
+    if (blocked) {
+        context
+            .meterRegistry
+            .counter("pay_af_blocks_total", "type", "invoice")
+            .increment()
+        PaymentsHardening.respondTooManyRequests(
+            call = this,
+            retryAfterSeconds = context.retryAfterSeconds,
+            requestId = callId,
+            type = "velocity",
+        )
+    }
+    return !blocked
 }
