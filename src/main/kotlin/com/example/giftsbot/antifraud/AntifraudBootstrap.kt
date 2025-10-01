@@ -4,6 +4,8 @@ import com.example.giftsbot.antifraud.store.InMemoryBucketStore
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
+import io.ktor.server.routing.routing
+import io.ktor.util.AttributeKey
 import io.micrometer.core.instrument.MeterRegistry
 
 private const val CONFIG_PREFIX = "app.antifraud"
@@ -19,6 +21,8 @@ private const val CONFIG_TRUST_PROXY = "$CONFIG_PREFIX.rl.trustProxy"
 private const val CONFIG_INCLUDE_PATHS = "$CONFIG_PREFIX.rl.includePaths"
 private const val CONFIG_EXCLUDE_PATHS = "$CONFIG_PREFIX.rl.excludePaths"
 private const val CONFIG_RETRY_AFTER = "$CONFIG_PREFIX.rl.retryAfter"
+private const val CONFIG_ADMIN_TOKEN = "$CONFIG_PREFIX.admin.token"
+private const val CONFIG_BAN_DEFAULT_TTL = "$CONFIG_PREFIX.ban.defaultTtlSeconds"
 
 private const val ENV_IP_ENABLED = "RL_IP_ENABLED"
 private const val ENV_IP_RPS = "RL_IP_RPS"
@@ -32,22 +36,45 @@ private const val ENV_TRUST_PROXY = "RL_TRUST_PROXY"
 private const val ENV_INCLUDE_PATHS = "RL_INCLUDE_PATHS"
 private const val ENV_EXCLUDE_PATHS = "RL_EXCLUDE_PATHS"
 private const val ENV_RETRY_AFTER = "RL_RETRY_AFTER_SECONDS"
+private const val ENV_ADMIN_TOKEN = "ADMIN_TOKEN"
+private const val ENV_BAN_DEFAULT_TTL = "RL_BAN_DEFAULT_TTL_SECONDS"
+
+val SUSPICIOUS_IP_STORE_KEY: AttributeKey<SuspiciousIpStore> = AttributeKey("antifraud.suspiciousIpStore")
 
 fun Application.installAntifraudIntegration(
     meterRegistry: MeterRegistry,
     store: BucketStore? = null,
     clock: Clock = SystemClock,
     subjectResolver: ((ApplicationCall) -> Long?)? = null,
+    suspiciousIpStore: SuspiciousIpStore = InMemorySuspiciousIpStore(),
 ) {
     val rateLimitConfig = loadConfig()
     val bucketStore = store ?: InMemoryBucketStore()
     val sharedTokenBucket = TokenBucket(bucketStore, clock)
+    if (!attributes.contains(SUSPICIOUS_IP_STORE_KEY)) {
+        attributes.put(SUSPICIOUS_IP_STORE_KEY, suspiciousIpStore)
+    }
+    val adminToken = readAdminToken()
+    val defaultBanTtl = readBanDefaultTtl()
     install(RateLimitPlugin) {
         tokenBucket = sharedTokenBucket
         this.clock = clock
         this.meterRegistry = meterRegistry
         config = rateLimitConfig
         subjectResolver?.let { resolver -> this.subjectResolver = resolver }
+        this.suspiciousIpStore = suspiciousIpStore
+    }
+    if (adminToken == null) {
+        environment.log.warn("ADMIN_TOKEN is not configured. Antifraud admin routes will not be registered.")
+    } else {
+        routing {
+            adminAntifraudRoutes(
+                adminToken = adminToken,
+                store = suspiciousIpStore,
+                meterRegistry = meterRegistry,
+                defaultBanTtlSeconds = defaultBanTtl,
+            )
+        }
     }
     environment.log.info(
         "Antifraud installed (ip=${if (rateLimitConfig.ipEnabled) "on" else "off"}, " +
@@ -91,6 +118,17 @@ private fun Application.loadConfig(): RateLimitConfig {
     )
 }
 
+private fun Application.readAdminToken(): String? =
+    readRaw(ENV_ADMIN_TOKEN, CONFIG_ADMIN_TOKEN)?.takeUnless { it.isBlank() }
+
+private fun Application.readBanDefaultTtl(): Long =
+    readLong(
+        ENV_BAN_DEFAULT_TTL,
+        CONFIG_BAN_DEFAULT_TTL,
+        default = 86_400L,
+        allowZero = true,
+    )
+
 private fun Application.readString(
     envKey: String,
     configKey: String,
@@ -120,7 +158,15 @@ private fun Application.readLong(
     envKey: String,
     configKey: String,
     default: Long,
-): Long = readRaw(envKey, configKey)?.toLongOrNull()?.takeIf { it > 0 } ?: default
+    allowZero: Boolean = false,
+): Long {
+    val parsed = readRaw(envKey, configKey)?.toLongOrNull() ?: return default
+    return when {
+        parsed < 0 -> default
+        !allowZero && parsed == 0L -> default
+        else -> parsed
+    }
+}
 
 private fun Application.readDouble(
     envKey: String,

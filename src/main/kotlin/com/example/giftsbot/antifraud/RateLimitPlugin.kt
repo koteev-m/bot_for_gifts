@@ -37,6 +37,7 @@ class RateLimitPluginConfig {
     lateinit var meterRegistry: MeterRegistry
     lateinit var config: RateLimitConfig
     var subjectResolver: (ApplicationCall) -> Long? = ::extractSubjectId
+    var suspiciousIpStore: SuspiciousIpStore? = null
 
     internal fun validated(): RateLimitPluginDependencies {
         check(::tokenBucket.isInitialized) { "RateLimitPlugin tokenBucket is not initialized" }
@@ -49,6 +50,7 @@ class RateLimitPluginConfig {
             meterRegistry = meterRegistry,
             config = config,
             subjectResolver = subjectResolver,
+            suspiciousIpStore = suspiciousIpStore,
         )
     }
 }
@@ -59,6 +61,7 @@ internal data class RateLimitPluginDependencies(
     val meterRegistry: MeterRegistry,
     val config: RateLimitConfig,
     val subjectResolver: (ApplicationCall) -> Long?,
+    val suspiciousIpStore: SuspiciousIpStore?,
 )
 
 private enum class RateLimitType(
@@ -98,12 +101,31 @@ val RateLimitPlugin =
             }
             metrics.incrementChecked()
 
+            val ip: String? =
+                if (dependencies.config.ipEnabled || dependencies.suspiciousIpStore != null) {
+                    extractClientIp(call, dependencies.config.trustProxy)
+                } else {
+                    null
+                }
+
+            if (ip != null) {
+                val store = dependencies.suspiciousIpStore
+                if (store != null) {
+                    val now = dependencies.clock.nowMillis()
+                    val (banned, remainingSeconds) = store.isBanned(ip, now)
+                    if (banned) {
+                        metrics.recordForbidden()
+                        call.respondIpForbidden(remainingSeconds)
+                        return@onCall
+                    }
+                }
+            }
+
             if (dependencies.config.ipEnabled) {
-                val ip = extractClientIp(call, dependencies.config.trustProxy)
                 val decision =
                     dependencies
                         .tokenBucket
-                        .tryConsume(IpKey(ip), ipParams)
+                        .tryConsume(IpKey(ip!!), ipParams)
                         .withFallback(
                             params = ipParams,
                             fallbackSeconds = dependencies.config.retryAfterFallbackSeconds,
@@ -199,6 +221,17 @@ private suspend fun ApplicationCall.respondRateLimited(
     respond(HttpStatusCode.TooManyRequests, payload)
 }
 
+private suspend fun ApplicationCall.respondIpForbidden(retryAfterSeconds: Long?) {
+    val payload =
+        BannedIpErrorResponse(
+            error = "ip_banned",
+            status = HttpStatusCode.Forbidden.value,
+            requestId = callId ?: "",
+            retryAfterSeconds = retryAfterSeconds,
+        )
+    respond(HttpStatusCode.Forbidden, payload)
+}
+
 private class RateLimitMetrics(
     registry: MeterRegistry,
 ) {
@@ -207,6 +240,7 @@ private class RateLimitMetrics(
     private val allowedIp: Counter = counter(registry, "af_rl_allowed_total", IP.metricTag)
     private val allowedSubject: Counter = counter(registry, "af_rl_allowed_total", SUBJECT.metricTag)
     private val checked: Counter = Counter.builder("af_rl_checked_total").register(registry)
+    private val forbiddenIp: Counter = Counter.builder("af_ip_forbidden_total").register(registry)
     private val retryAfterSummary: DistributionSummary =
         DistributionSummary
             .builder("af_rl_retry_after_seconds")
@@ -221,6 +255,10 @@ private class RateLimitMetrics(
             IP -> allowedIp.increment()
             SUBJECT -> allowedSubject.increment()
         }
+    }
+
+    fun recordForbidden() {
+        forbiddenIp.increment()
     }
 
     fun recordBlocked(
@@ -253,4 +291,12 @@ private data class RateLimitErrorResponse(
     val requestId: String,
     val type: String,
     val retryAfterSeconds: Long,
+)
+
+@Serializable
+private data class BannedIpErrorResponse(
+    val error: String,
+    val status: Int,
+    val requestId: String,
+    val retryAfterSeconds: Long?,
 )
